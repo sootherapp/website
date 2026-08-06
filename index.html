@@ -80,8 +80,19 @@
     cursor: none;
   }
   canvas {
-    display: block; position: absolute; top: 0; left: 0;
-    width: 100vw; height: 100vh; width: 100dvw; height: 100dvh;
+    /* FIXED, and sized in vh rather than dvh.
+       ------------------------------------------------------------
+       Saved to an iPhone home screen, the app ran under the status bar
+       correctly but left a dark strip across the bottom, exactly the height of
+       the home indicator. The cause was the dvh pair below overriding the vh
+       pair: the dynamic viewport height stops short of the home-indicator
+       inset, while vh under viewport-fit=cover is the whole screen. Two
+       declarations were fighting and the shorter one won because it came last.
+
+       Fixed rather than absolute so it is laid out against the screen itself,
+       not against a body box that may be shorter. */
+    display: block; position: fixed; top: 0; left: 0;
+    width: 100vw; height: 100vh;
     touch-action: none; user-select: none; -webkit-user-select: none;
     -webkit-touch-callout: none; -webkit-tap-highlight-color: rgba(0,0,0,0);
     outline: none; border: none; cursor: none;
@@ -227,8 +238,15 @@
   }
   function resize() {
     var oW = W, oH = H;
-    W = Math.max(1, window.innerWidth);
-    H = Math.max(1, window.innerHeight);
+    /* Measured from the canvas ITSELF rather than from the window, so the
+       drawing buffer can never disagree with the box it is displayed in. That
+       disagreement is what turns a layout quirk into a stretched or letterboxed
+       picture, and it is avoidable by never asking two different sources how
+       big the thing is. Falls back to the window if the element has not been
+       laid out yet. */
+    var box = view.getBoundingClientRect();
+    W = Math.max(1, Math.round(box.width) || window.innerWidth);
+    H = Math.max(1, Math.round(box.height) || window.innerHeight);
     DIAG = Math.sqrt(W * W + H * H);
     // carry everyone across proportionally, so a resize - or a recovery
     // from a zero-size boot - does not leave the world in one corner
@@ -3714,8 +3732,37 @@
     paceDirty = false;
     try { if (window.localStorage) localStorage.setItem('soother.pace', pace.toFixed(3)); } catch (e8) {}
   }
+  /* Everything already scheduled moves with the dial.
+     ------------------------------------------------------------
+     Turning it up felt instant and turning it down felt broken, and the reason
+     was not the fade rate - it was that every pending event had already been
+     given a time. The next foam, ember, phrase, planet and bloom were each
+     booked minutes ahead when the last one fired, and lowering the setting did
+     not retract any of them, so the room carried on doing exactly what it was
+     already going to do. Raising felt immediate only because a shorter interval
+     usually means the next event is already overdue.
+
+     So the waits are rescaled in place. Each pending timer keeps the fraction of
+     its wait that has elapsed and has the remainder stretched or shortened, which
+     means the dial governs the future as well as the present and does it in both
+     directions. */
+  function rescaleWaits(k) {
+    var t = now();
+    function re(v) { return v > t ? t + (v - t) * k : v; }
+    emberNext = re(emberNext);
+    worldNext = re(worldNext);
+    bubNext = re(bubNext);
+    seqNext = re(seqNext);
+    wantNext = re(wantNext);
+    bandNext = re(bandNext);
+    if (bloom && bloom.next) bloom.next = re(bloom.next);
+  }
+
   function setPace(v) {
+    var was = paceGap();
     pace = clamp(v, 0, 1);
+    var now2 = paceGap();
+    if (was > 0.0001 && Math.abs(now2 - was) > 0.0001) rescaleWaits(now2 / was);
     paceUI.idle = 0;
     paceDirty = true;
   }
@@ -3885,38 +3932,38 @@
      bar chart climbing left to right is about as close to universal as a glyph
      gets. */
   function drawBars(g, r, v) {
-    /* Heavier than the first version, which came out visibly fainter than its
-       two neighbours: they are filled shapes and these were thin strokes, so at
-       matched alpha the bars simply put less light on the screen. Same trick as
-       any icon set - a bar chart has to be drawn with weight or it reads as a
-       diagram of an icon rather than an icon. Wider, taller, squarer ends, and
-       the unlit ones are still clearly there so the scale can be read. */
-    /* How FINDABLE the button is must not depend on what it is set to.
+    /* Dots, and arrows for changing how many.
        ------------------------------------------------------------
-       The unlit bars were drawn at a third, so at a low setting three of the
-       four nearly vanished and the whole icon lost most of its ink - which is
-       backwards, because a room that has been turned right down is exactly where
-       somebody is most likely to be looking for the control again.
+       The bars were a METER, and a meter says "level of something" without ever
+       saying of what - which is exactly how it read to somebody seeing it cold:
+       signal strength. Its two neighbours work because they are nouns. A speaker
+       is sound. A moon is night. Bars are a quantity with no subject.
 
-       So every bar is plainly there whatever the level, and the level is told by
-       a step in brightness rather than by presence. The glyph keeps the same
-       weight at nought as it has at one. */
+       So the subject is drawn instead. The room is dots of light, so the icon is
+       dots of light, and the up and down arrows beside them say the one thing
+       left to say: there can be more of these or fewer. Nothing here moves or
+       fills - it is meant to be understood once and then forgotten, and an icon
+       that animates is an icon that keeps asking to be looked at. */
     var u = r / 15;
-    g.lineCap = 'butt';
-    var base = g.strokeStyle;
-    for (var i = 0; i < 4; i++) {
-      var h = (4.4 + i * 3.4) * u;
-      var x = (-7.2 + i * 4.8) * u;
-      var lit = v >= (i + 0.35) / 4;
-      g.globalAlpha = lit ? 1 : 0.62;
+    // the room: a loose scatter, deliberately uneven so it reads as living
+    var D = [[-8.2, -3.6, 2.0], [-3.8, -6.0, 1.5], [-6.6, 2.4, 2.5],
+             [-2.6, 0.4, 1.8], [-5.4, 7.0, 1.3]];
+    for (var i = 0; i < D.length; i++) {
       g.beginPath();
-      g.moveTo(x, 8 * u); g.lineTo(x, 8 * u - h);
-      g.lineWidth = lit ? 3.6 * u : 3.1 * u;
-      g.stroke();
+      g.arc(D[i][0] * u, D[i][1] * u, D[i][2] * u, 0, TAU);
+      g.fill();
     }
-    g.globalAlpha = 1;
-    g.strokeStyle = base;
-    g.lineCap = 'round';
+    // and the two arrows, which are the whole message: more of them, or fewer
+    function arrow(cy, dir) {
+      g.beginPath();
+      g.moveTo(5.6 * u, (cy - 2.6 * dir) * u);
+      g.lineTo(8.9 * u, (cy + 1.1 * dir) * u);
+      g.lineTo(2.3 * u, (cy + 1.1 * dir) * u);
+      g.closePath();
+      g.fill();
+    }
+    arrow(-4.4, 1);       // up
+    arrow(5.0, -1);       // down
   }
 
   // and the tick it becomes while the slider is open
@@ -6760,6 +6807,194 @@
     return null;
   }
 
+  /* ============================================================
+     LAUNCHES
+     ------------------------------------------------------------
+     Tap a planet and sometimes a handful of tiny rockets leave the surface.
+     Each one is given a fate at launch and none of them ends well, which is the
+     joke: one bursts almost at once, one gets a long way out before it goes, one
+     loses its bearings and corkscrews until it gives up, and one never really
+     leaves - it stalls, falls back, and goes off against the ground it came
+     from.
+
+     It is an easter egg, so it is not every tap. Roughly half of them, which is
+     often enough to be found by a child pressing things and rare enough that
+     finding it feels like finding something.
+
+     Written to be cheap. A rocket is a point with a short plume drawn into the
+     trail buffer, which is safe here precisely because they move fast - it is
+     stationary things that burn a hole in that buffer. There is a hard ceiling
+     on how many can exist, the bursts reuse the spark pool that already exists,
+     and only the first couple in a volley are allowed to make a sound.
+     ============================================================ */
+  var ROCKETS = [];
+  var ROCKET_MAX = 40;
+
+  /* Sparks that actually go OUTWARDS.
+     ------------------------------------------------------------
+     emitSpark keeps only three tenths of the velocity it is handed and adds a
+     random vector of up to a couple of hundred on top, which is right for the
+     scatter it was written for and wrong for this: every burst came out a puff
+     rather than a shell, which is most of why none of it read as a firework.
+     Handing it a big enough velocity puts the radial part back in charge. */
+  function burstRing(x, y, hue, n, speed, life) {
+    for (var i = 0; i < n; i++) {
+      var a2 = (i / n) * TAU + rnd(-0.10, 0.10);
+      var sp = speed * rnd(0.7, 1.3);
+      emitSpark(x, y, Math.cos(a2) * sp, Math.sin(a2) * sp, hue + rnd(-34, 34), life);
+    }
+  }
+
+  function flash(x, y, hue, r, a3) {
+    blob(tctx, x, y, r, hue, a3);
+    blob(tctx, x, y, r * 0.45, hue + 20, a3 * 1.3);
+    wave(tctx, x, y, r * 1.5, hue + 40, a3 * 0.7);
+  }
+
+  /* Two things a planet does when it is tapped, and they are meant to be told
+     apart at a glance.
+
+     ROCKETS are individual and they go wrong. Each is given a fate at launch:
+     one bursts early, one gets a long way out, one loses its bearings and
+     corkscrews, and one never really leaves - it stalls, falls back and goes off
+     against the ground it came from.
+
+     A FIREWORK is the opposite: one shell, no drama on the way, rising in a
+     clean arc a long way clear of the planet before it opens into a proper ring.
+
+     The first version of the rockets was drawn at two and a half pixels and a
+     quarter alpha, which next to creatures forty pixels across and far brighter
+     is simply not there. Both of these are now bold and both travel properly
+     clear of the surface, because the whole point is watching something leave. */
+  function launchRockets(big, t) {
+    var R = worldR(big);
+    var n = 3 + ((Math.random() * 4) | 0);
+    var voice = 0;
+    for (var i = 0; i < n && ROCKETS.length < ROCKET_MAX; i++) {
+      var ang = Math.random() * TAU;
+      var fate = pick(['quick', 'far', 'far', 'spin', 'dud']);
+      ROCKETS.push({
+        kind: 'rocket', fate: fate,
+        x: big.x + Math.cos(ang) * R * 0.94, y: big.y + Math.sin(ang) * R * 0.94,
+        vx: Math.cos(ang) * rnd(120, 190), vy: Math.sin(ang) * rnd(120, 190),
+        dir: ang, home: big,
+        burn: fate === 'quick' ? rnd(0.45, 0.70)
+            : fate === 'far' ? rnd(1.40, 2.20)
+            : fate === 'spin' ? rnd(1.00, 1.80)
+            : rnd(0.18, 0.30),
+        curl: fate === 'spin' ? (Math.random() < 0.5 ? -1 : 1) * rnd(1.5, 2.8) : 0,
+        hue: world.hue + big.hueOff + rnd(18, 50),
+        age: 0, sound: voice++ < 2
+      });
+    }
+    flash(big.x, big.y, world.hue + big.hueOff + 30, R * 1.2, 0.22);
+    if (A.ok && A.started) { voiceBg++; breath(noteI(2), 0.022, panOf(big.x), 0.5, 1.1); voiceBg--; }
+  }
+
+  function launchFirework(big, t) {
+    if (ROCKETS.length >= ROCKET_MAX) return;
+    var R = worldR(big);
+    var ang = Math.random() * TAU;
+    ROCKETS.push({
+      kind: 'shell',
+      x: big.x + Math.cos(ang) * R * 0.94, y: big.y + Math.sin(ang) * R * 0.94,
+      vx: Math.cos(ang) * rnd(230, 300), vy: Math.sin(ang) * rnd(230, 300),
+      dir: ang, home: big,
+      burn: rnd(0.95, 1.45),                 // a long clean rise
+      curl: rnd(-0.5, 0.5),                  // the faintest lean, so it arcs
+      hue: world.hue + big.hueOff + rnd(0, 300),
+      age: 0, sound: true
+    });
+    flash(big.x, big.y, world.hue + big.hueOff + 30, R * 1.1, 0.18);
+    if (A.ok && A.started) { voiceBg++; breath(noteI(1), 0.020, panOf(big.x), 0.45, 1.3); voiceBg--; }
+  }
+
+  function burstRocket(r, t) {
+    if (r.kind === 'shell') {
+      // the whole point of it: a big round ring, well away from home
+      burstRing(r.x, r.y, r.hue, 34 + ((Math.random() * 16) | 0), 1500, 1.25);
+      burstRing(r.x, r.y, r.hue + 40, 14, 700, 0.9);
+      flash(r.x, r.y, r.hue, 34, 0.40);
+      if (r.sound && A.ok && A.started) {
+        drop(noteI(2 + ((Math.random() * 3) | 0)), 0.030, panOf(r.x));
+      }
+      return;
+    }
+    var hard = r.fate === 'far' || r.fate === 'dud';
+    burstRing(r.x, r.y, r.hue, hard ? 20 : 12, hard ? 1000 : 620, hard ? 1.0 : 0.75);
+    flash(r.x, r.y, r.hue, hard ? 22 : 15, hard ? 0.30 : 0.20);
+    if (r.sound && A.ok && A.started) {
+      drop(noteI(4 + ((Math.random() * 4) | 0)) * 2, hard ? 0.026 : 0.018, panOf(r.x));
+    }
+  }
+
+  function updateRockets(dt, t) {
+    for (var i = ROCKETS.length - 1; i >= 0; i--) {
+      var r = ROCKETS[i];
+      r.age += dt;
+      var big = r.home;
+      var alive = big && big.world && big.vit > 0.2;
+      var burning = r.age < r.burn;
+
+      if (burning) {
+        if (r.curl) r.dir += r.curl * dt * (r.kind === 'shell' ? 1 : (0.5 + r.age * 2.2));
+        var push = r.kind === 'shell' ? 340
+                 : (r.fate === 'far' ? 420 : (r.fate === 'dud' ? 110 : 320));
+        r.vx += Math.cos(r.dir) * push * dt;
+        r.vy += Math.sin(r.dir) * push * dt;
+      }
+      /* Its own planet keeps a hold on it, which is what brings a dud back down
+         and gives everything else a slight arc instead of a straight line. */
+      if (alive) {
+        var dx = big.x - r.x, dy = big.y - r.y;
+        var d = Math.hypot(dx, dy) + 1;
+        var g = r.fate === 'dud' ? 300 : 42;
+        r.vx += (dx / d) * g * dt;
+        r.vy += (dy / d) * g * dt;
+      }
+      r.vx *= Math.pow(0.988, dt * 60);
+      r.vy *= Math.pow(0.988, dt * 60);
+      r.x += r.vx * dt; r.y += r.vy * dt;
+
+      if (alive && r.age > 0.12 &&
+          Math.hypot(r.x - big.x, r.y - big.y) < worldR(big) * 0.98) {
+        burstRocket(r, t); ROCKETS.splice(i, 1); continue;
+      }
+      var over = r.kind === 'shell' ? r.burn + rnd(0.10, 0.30)
+               : r.fate === 'quick' ? r.burn + rnd(0.10, 0.30)
+               : r.fate === 'far' ? r.burn + 0.9
+               : r.fate === 'spin' ? r.burn + 0.5
+               : 4.0;
+      if (r.age > over) { burstRocket(r, t); ROCKETS.splice(i, 1); continue; }
+      if (r.x < -90 || r.x > W + 90 || r.y < -90 || r.y > H + 90) ROCKETS.splice(i, 1);
+    }
+  }
+
+  function drawRockets(t, awake) {
+    var lit = 0.55 + awake * 0.45;
+    for (var i = 0; i < ROCKETS.length; i++) {
+      var r = ROCKETS[i];
+      var burning = r.age < r.burn;
+      var shell = r.kind === 'shell';
+      var sp = Math.hypot(r.vx, r.vy) + 1;
+      var ux = -r.vx / sp, uy = -r.vy / sp;
+      /* The plume is spaced along the ACTUAL travel each frame, so it reads as a
+         streak behind something moving rather than a fixed little tail. */
+      var step = clamp(sp * 0.016, 3, 11);
+      var segs = burning ? (shell ? 9 : 7) : 3;
+      for (var q = 1; q <= segs; q++) {
+        var f = q / segs;
+        blob(tctx, r.x + ux * q * step, r.y + uy * q * step,
+             (shell ? 5.2 : 4.4) * (1 - f * 0.72),
+             r.hue + 20 + f * 30, (burning ? 0.26 : 0.10) * (1 - f * 0.85) * lit);
+      }
+      blob(tctx, r.x, r.y, shell ? 7 : 5.6, r.hue,
+           (burning ? 0.55 : 0.30) * lit);
+      blob(tctx, r.x, r.y, shell ? 3.2 : 2.6, r.hue + 30,
+           (burning ? 0.5 : 0.28) * lit);
+    }
+  }
+
   function pokeCreature(c, px, py, t) {
     world.poked++;
     if (c.elder) {
@@ -6783,6 +7018,35 @@
         breath(noteI(5), 0.05, panOf(c.x), 0.7, 6);
       }
       voicePrio--;
+      return;
+    }
+    /* A planet is not a creature and should not answer like one every time.
+       About half of the taps send up a launch instead, which is the easter egg;
+       the rest fall through to the ordinary twelve outcomes below. */
+    /* A planet always does its OWN thing, and it is the thing you can see it is.
+       ------------------------------------------------------------
+       Rolling a fresh outcome per tap made every planet the same planet with a
+       random mood, and nothing about it could be learnt - tap it twice and get
+       two different answers, which reads as noise rather than as character. Tied
+       to the type instead, which is already decided at birth and already
+       visible: a rocky one sends out rings, a banded one launches rockets, a
+       ringed one puts up a firework. Tap the same planet all afternoon and it
+       will do the same thing, and after meeting two or three of them you can
+       tell from across the room which one you have. */
+    if (c.world) {
+      c.flare = Math.max(c.flare, 0.5);
+      c.mood = clamp(c.mood + 0.25, 0, 1);
+      if (c.ptype === 1) launchRockets(c, t);
+      else if (c.ptype === 2) launchFirework(c, t);
+      else {
+        // rings: the one that was already there and worth keeping
+        spawnPulse(c.x, c.y, {
+          energy: 1.15, reach: rnd(0.55, 0.85), uni: 1.0, budget: 20,
+          kind: RIPPLES[0], layers: [0, 1, 2], speed: rnd(210, 300), show: 1.3
+        });
+        burstRing(c.x, c.y, world.hue + c.hueOff + 30, 14, 520, 0.8);
+        if (A.ok && A.started) { voiceBg++; breath(noteI(3), 0.022, panOf(c.x), 0.5, 1.4); voiceBg--; }
+      }
       return;
     }
     var hue = world.hue + c.hueOff + 40;
@@ -9712,6 +9976,7 @@
     updatePinch(list, t);
     updateErosion(list, dt, t);
     updateWorldSpawn(dt, t);
+    updateRockets(dt, t);
     updateWEV(dt);
     updateMFX(dt);
     updateSoap(dt);
@@ -9982,7 +10247,13 @@
          go through unWorld, which gives it the send-off. An ember has one job
          and has to survive long enough to be found and held. */
       var vt = (alive && (c.age < c.span || c.held || c.world || c.ember)) ? 1 : 0;
-      c.vit = approach(c.vit, vt, vt > c.vit ? 1.2 : 2.2, dt);
+      /* While the dial is open the population follows in under a second rather
+         than over five, so dragging it shows you the room you are choosing
+         instead of the room you had. Back to the gentle rates as soon as it is
+         put away, because outside of that moment things arriving and leaving
+         should not be abrupt. */
+      var vtau = paceUI.open ? 0.3 : (vt > c.vit ? 1.2 : 2.2);
+      c.vit = approach(c.vit, vt, vtau, dt);
       /* Some coming and going, but not much: about one creature a
          minute quietly thins away and another fades up somewhere
          else, so the population feels alive rather than fixed. */
@@ -10422,6 +10693,7 @@
     drawWEV(t);
     drawMFX(t);
     drawSoap(t);
+    drawRockets(t, awake);
     drawSeqs(t, awake);
     drawWants(t, awake);
     drawFeeds(t, awake);
