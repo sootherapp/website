@@ -132,6 +132,8 @@
     return cur + (target - cur) * (1 - Math.exp(-dt / Math.max(0.0001, tau)));
   }
   function norm360(d) { d = d % 360; return d < 0 ? d + 360 : d; }
+  // shortest signed angle, for steering toward a heading
+  function wrapRad(a) { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; }
   function wrapDeg(d) { d = (d + 180) % 360; if (d < 0) d += 360; return d - 180; }
   function wrapAngle(a) { while (a > Math.PI) a -= TAU; while (a < -Math.PI) a += TAU; return a; }
   function approachHue(cur, target, tau, dt) {
@@ -6556,6 +6558,7 @@
     later.push({ at: now() + delay, fn: fn });
   }
   var duck = 1, duckUntil = -99, pDuck = 1;
+  var chordNext = 0;    // how long until a sweep may sound again
   function runLater(t) {
     for (var i = later.length - 1; i >= 0; i--) {
       if (t >= later[i].at) { var f = later[i].fn; later.splice(i, 1); f(t); }
@@ -6994,6 +6997,24 @@
            (burning ? 0.5 : 0.28) * lit);
     }
   }
+
+  /* The CHASE and the DROP used to live here, and they are gone.
+     ------------------------------------------------------------
+     A thing appeared while you swept, a follower answered your swipes through a
+     random rotation, and steering one into the other made the whole room fall
+     to the floor. It worked - it was measured working, caught in a couple of
+     seconds from six hundred pixels out - and it was still wrong.
+
+     It put a GOAL in an app whose entire character is that there is nothing to
+     achieve. Everything else here answers you immediately and in proportion:
+     touch more, get more, now. The chase asked you to want something, gave you
+     a few seconds to get it, and could be lost. And the reward broke continuity
+     worse than the goal did - gravity is not a thing in this world, so the room
+     collapsing into a heap read as the app breaking rather than as a joke.
+
+     What replaced it is below and in the hand-drawing code: rewards that arrive
+     as you move, get larger the more of your hand you use, and cannot be missed.
+     ============================================================ */
 
   function pokeCreature(c, px, py, t) {
     world.poked++;
@@ -9973,6 +9994,60 @@
       }
       list.push(p); active++;
     });
+
+    /* ---- how many fingers, how full the chord ---------------------------
+       Position is already pitch, exactly and invertibly, so a sweep is
+       literally playing a line - but it only ever played one note at a time
+       however much of your hand was on the glass, which is why there was no
+       reason to use more than a finger.
+
+       Now the number of fingers down IS the size of the chord. One is a single
+       note, two adds the fifth, three makes a triad, four or more a wide
+       shimmering stack. Every interval comes out of the same anhemitonic
+       pentatonic as everything else, so it cannot be made to sound wrong, and
+       the whole thing is arithmetic on a count - there is no technique to
+       learn and nothing to get right. A whole hand simply sounds better than
+       one finger, straight away.
+
+       Only the fastest hand speaks, and only every so often. Five fingers
+       meaning five times the voices would be five times the load on a device
+       that is already struggling, and it would sound like a scramble rather
+       than a chord. */
+    var swN = 0, lead = null, leadSp = 0;
+    for (var si = 0; si < list.length; si++) {
+      var sp3 = list[si];
+      if (!sp3.down) continue;
+      swN++;
+      var v3 = Math.hypot(sp3.vx, sp3.vy);
+      if (v3 > leadSp) { leadSp = v3; lead = sp3; }
+    }
+    chordNext -= dt;
+    if (lead && leadSp > 260 && chordNext <= 0 && !lead.charging &&
+        A.ok && A.started && world.sleep < 0.6) {
+      var voices = Math.min(4, swN);
+      /* A bigger chord is spaced further apart, so five fingers is not five
+         times the voices per second - measured, a whole hand went from about
+         three notes a second to six rather than to nineteen. That matters on an
+         older tablet, which already drops notes when the room is busy, and it
+         sounds better anyway: a full chord wants room to ring rather than to be
+         trodden on by the next one. */
+      chordNext = (0.26 + voices * 0.10) - clamp(leadSp / 4000, 0, 0.10);
+      var base = noteIdxAt(lead.x);
+      var oc = octAt(lead.y);
+      var pan3 = panOf(lead.x);
+      // stacked scale degrees: always consonant, wider with more fingers
+      var STEPS = [0, 2, 4, 6];
+      mine((function (voices2, base2, oc2, pan4, spd) {
+        return function () {
+          for (var q3 = 0; q3 < voices2; q3++) {
+            var deg = clamp(base2 + STEPS[q3], 0, NOTES.length - 1);
+            var lvl = (0.020 + spd * 0.000012) * (q3 ? 0.55 : 1);
+            chime(noteI(deg) * oc2 * (q3 > 2 ? 2 : 1), lvl,
+                  clamp(pan4 + (q3 - 1) * 0.18, -1, 1), 0.7, 1.6 + q3 * 0.4);
+          }
+        };
+      })(voices, base, oc, pan3, leadSp));
+    }
     updatePinch(list, t);
     updateErosion(list, dt, t);
     updateWorldSpawn(dt, t);
@@ -10717,8 +10792,40 @@
     }
 
     /* ---- the hand ---- */
+    /* A whole hand is worth more than a finger.
+       ------------------------------------------------------------
+       Nothing here used to care how many fingers were on the glass, so there
+       was no reason to use more than one. Now a moving hand rakes the water it
+       is moving through - one furrow per finger, cut across the direction of
+       travel so they read as the marks of a comb rather than as one wide smear
+       - and the whole thing gets stronger with every extra finger. There is no
+       trick to it and nothing to get right; five fingers simply plough more
+       than one, immediately, which is the only kind of reward this app should
+       be handing out. */
+    var handN = 0;
+    for (var hn = 0; hn < list.length; hn++) if (list[hn].down) handN++;
+    var rakeK = 1 + (handN - 1) * 0.55;
     for (var hI = 0; hI < list.length; hI++) {
       var hp = list[hI];
+      if (hp.down) {
+        var hsp = Math.hypot(hp.vx, hp.vy);
+        if (hsp > 140) {
+          var ux2 = hp.vx / hsp, uy2 = hp.vy / hsp;
+          /* Across the travel, not along it. A furrow is the mark left beside
+             where the tooth went, so the teeth are laid out on the
+             perpendicular and each one turns the water its own way. */
+          var tine = Math.min(3, handN);
+          for (var ti = 0; ti < tine; ti++) {
+            var off = (ti - (tine - 1) * 0.5) * 26;
+            var sgn = (ti & 1) ? -1 : 1;
+            addStir(hp.x - uy2 * off, hp.y + ux2 * off,
+                    0.055 * sgn * rakeK * clamp(hsp / 900, 0.3, 1.2), 0.16);
+            blob(tctx, hp.x - uy2 * off, hp.y + ux2 * off,
+                 5 + rakeK * 2.5, world.hue + 40 + ti * 26,
+                 0.05 * clamp(hsp / 700, 0.2, 1));
+          }
+        }
+      }
       var pw = clamp(hp.path / 900, 0, 1);
       // a still hand redraws the same pixels every frame, so alpha here
       // is dose-per-frame, not brightness; without this it burns a disc
