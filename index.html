@@ -82,15 +82,18 @@
   canvas {
     /* FIXED, and sized in vh rather than dvh.
        ------------------------------------------------------------
-       Saved to an iPhone home screen, the app ran under the status bar
-       correctly but left a dark strip across the bottom, exactly the height of
-       the home indicator. The cause was the dvh pair below overriding the vh
-       pair: the dynamic viewport height stops short of the home-indicator
-       inset, while vh under viewport-fit=cover is the whole screen. Two
-       declarations were fighting and the shorter one won because it came last.
+       vh under viewport-fit=cover is the whole screen; the dynamic viewport
+       height stops short of the iPhone home-indicator inset, so dvh would
+       leave a strip along the bottom. Fixed rather than absolute so it is laid
+       out against the screen itself, not against a body box that may be
+       shorter.
 
-       Fixed rather than absolute so it is laid out against the screen itself,
-       not against a body box that may be shorter. */
+       These three declarations are the ONLY thing that decides how big the
+       canvas is on the page. The script sets the drawing buffer and must never
+       write width or height back onto this element: doing that turned the
+       measurement into a loop and froze the canvas at whatever size it booted
+       at, which is the bar along the bottom this was first blamed for. See
+       viewBox() in the script. */
     display: block; position: fixed; top: 0; left: 0;
     width: 100vw; height: 100vh;
     touch-action: none; user-select: none; -webkit-user-select: none;
@@ -229,26 +232,48 @@
   var GLOW_DIV = 5, BG_DIV = 1.35;   // the field is smooth; it does not need every pixel
   var W = 0, H = 0, PW = 0, PH = 0, DPR = 1, DIAG = 1;
 
+  /* How big the picture is, asked ONCE and never written back.
+     ------------------------------------------------------------
+     This used to measure the canvas with getBoundingClientRect and then set
+     the canvas's own style.width and style.height from what it measured. That
+     is a loop: after the first pass the rectangle is no longer the layout's
+     answer, it is the number we ourselves wrote there, so whatever size the
+     canvas happened to land on at boot became permanent. It could never grow
+     into a maximised window, into full screen, or into the space an iPhone
+     gives back when the URL bar rolls away - it just left a band of bare page
+     along the bottom. Caught here at 1 by 1 inside a 1280 by 720 window.
+
+     Worse, needResize compared window.innerHeight while resize wrote the
+     rectangle, so once those two disagreed they could never be reconciled and
+     resize ran EVERY FRAME - and resize assigns canvas.width, which wipes the
+     trail buffer and rebuilds the fluid grid. The picture was being erased
+     sixty times a second, which is why the trails looked so thin.
+
+     So: the stylesheet owns the display size (100vw by 100vh, fixed, under
+     viewport-fit=cover) and this owns only the drawing buffer. Both checks go
+     through the same function, so they cannot drift apart. */
+  function viewBox() {
+    var b = view.getBoundingClientRect();
+    var w = Math.round(b.width), h = Math.round(b.height);
+    // not laid out yet - a hidden tab, a background webview - so ask the window
+    if (w < 2) w = window.innerWidth || document.documentElement.clientWidth || 0;
+    if (h < 2) h = window.innerHeight || document.documentElement.clientHeight || 0;
+    return { w: Math.max(1, w), h: Math.max(1, h) };
+  }
   /* Reconciled every frame rather than trusting the resize event.
-     If the page boots before layout - a hidden tab, a background
-     webview - innerWidth is 0, the world gets built inside a single
-     pixel and never recovers, because no resize event is coming.
-     Checking each frame also absorbs orientation changes and the
-     mobile URL bar collapsing, which change height mid-play. */
+     If the page boots before layout the world gets built inside a single
+     pixel, and no resize event is coming to rescue it. Checking each frame
+     also absorbs orientation changes and the mobile URL bar collapsing, which
+     change height mid-play. */
   function needResize() {
-    return window.innerWidth !== W || window.innerHeight !== H;
+    var b = viewBox();
+    return b.w !== W || b.h !== H;
   }
   function resize() {
     var oW = W, oH = H;
-    /* Measured from the canvas ITSELF rather than from the window, so the
-       drawing buffer can never disagree with the box it is displayed in. That
-       disagreement is what turns a layout quirk into a stretched or letterboxed
-       picture, and it is avoidable by never asking two different sources how
-       big the thing is. Falls back to the window if the element has not been
-       laid out yet. */
-    var box = view.getBoundingClientRect();
-    W = Math.max(1, Math.round(box.width) || window.innerWidth);
-    H = Math.max(1, Math.round(box.height) || window.innerHeight);
+    var box = viewBox();
+    W = box.w;
+    H = box.h;
     DIAG = Math.sqrt(W * W + H * H);
     // carry everyone across proportionally, so a resize - or a recovery
     // from a zero-size boot - does not leave the world in one corner
@@ -268,8 +293,11 @@
     DPR = Math.max(0.75, DPR);
     PW = Math.max(1, Math.round(W * DPR));
     PH = Math.max(1, Math.round(H * DPR));
+    /* Only the drawing buffer. Setting style here is what created the loop
+       above, and it is not needed: the stylesheet already sizes the element,
+       and PW/PH are derived from that same box, so the two agree by
+       construction rather than by being copied. */
     view.width = PW; view.height = PH;
-    view.style.width = W + 'px'; view.style.height = H + 'px';
     trail.width = PW; trail.height = PH;
     glow.width = Math.max(1, Math.round(PW / GLOW_DIV));
     glow.height = Math.max(1, Math.round(PH / GLOW_DIV));
