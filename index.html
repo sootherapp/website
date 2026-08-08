@@ -2697,6 +2697,14 @@
       }
       lastTap.x = tx0; lastTap.y = ty0; lastTap.t = t;
     }
+    /* Remembered, in case you are playing a phrase. Only taps that got this
+       far: a press on a lit note or a bubble has already been answered in its
+       own way, and repeating those would be repeating the wrong thing. */
+    if (!ECHO.on) {
+      ECHO.taps.push({ t: t, x: tx0, y: ty0 });
+      if (ECHO.taps.length > ECHO_MAX) ECHO.taps.shift();
+    }
+
     /* The place-note belongs to the canvas. Touching a creature is touching a
        creature, and it answers in its own voice - laying the note of the spot
        over the top of it made every creature sound partly the same and buried
@@ -7044,6 +7052,366 @@
      as you move, get larger the more of your hand you use, and cannot be missed.
      ============================================================ */
 
+  /* ============================================================
+     THE STRING
+     ------------------------------------------------------------
+     Put two fingers on open water and a line is stretched between them. It
+     sounds for as long as you hold it, and how far apart your hands are IS the
+     pitch: close together is high, spread wide is low. Everything else here
+     answers a touch and then decays; this is the one thing you play.
+
+     Which is only making the app's own rule audible. Position has always been
+     pitch - noteIdxAt and octAt turn a place into a note, invertibly - but you
+     could only ever hear that one note at a time, struck. A held string turns
+     the same rule into something continuous that you can slide along, and the
+     pitch snaps to the same anhemitonic pentatonic as everything else, so it
+     steps between good notes rather than gliding through bad ones. It cannot
+     be played out of tune.
+
+     A third finger crossing the line plucks it. So does a creature drifting
+     through it, which is the part worth having: the string is an OBJECT lying
+     in the world, not a control drawn over the top of it, and if you hold one
+     still for long enough the room comes and plays it for you.
+
+     Two fingers on open water were doing nothing before this. The pinch
+     gesture needs a creature under each finger, so there is no collision -
+     hands on creatures pinch, hands on water make a string.
+     ============================================================ */
+  var STR = {
+    on: false, a: null, b: null, k: 0,      // k is presence, it fades in and out
+    amp: 0.06, phase: 0, deg: 5, f: 220, mode: 1,
+    v: null, pluckCool: 0, hue: 0
+  };
+
+  function strFree() {
+    if (!STR.v) return;
+    var v = STR.v; STR.v = null;
+    try {
+      var nt = A.ctx.currentTime;
+      v.g.gain.cancelScheduledValues(nt);
+      v.g.gain.setValueAtTime(Math.max(0.0001, v.g.gain.value), nt);
+      v.g.gain.setTargetAtTime(0.0001, nt, 0.12);
+      v.o.stop(nt + 0.9);
+      v.o.onended = function () {
+        try { v.o.disconnect(); v.lp.disconnect(); v.g.disconnect();
+              if (v.pn) v.pn.disconnect(); } catch (e) {}
+      };
+    } catch (e) {}
+  }
+
+  function strEnd() {
+    if (STR.a) STR.a.strSide = 0;
+    if (STR.b) STR.b.strSide = 0;
+    for (var i = 0; i < creatures.length; i++) creatures[i].strSide = 0;
+    STR.on = false; STR.a = null; STR.b = null;
+    strFree();
+  }
+
+  // does this finger have hold of the string? it may not also wind up a wave
+  function strOwns(p) { return STR.on && (p === STR.a || p === STR.b); }
+
+  function strPluck(x, y, hard, t) {
+    STR.amp = Math.min(1, STR.amp + (hard ? 0.55 : 0.30));
+    burstRing(x, y, STR.hue + rnd(-20, 20), hard ? 9 : 5, hard ? 320 : 190, 0.55);
+    addStir(x, y, (hard ? 0.10 : 0.055) * (Math.random() < 0.5 ? -1 : 1), 0.20);
+    if (STR.pluckCool > 0 || !A.ok || !A.started) return;
+    STR.pluckCool = 0.09;
+    var f = STR.f, pan = panOf(x);
+    if (hard) mine(function () { pluck(f * 2, 0.045, pan); });
+    else ambient(function () { pluck(f * 2, 0.022, pan); });
+  }
+
+  function updateString(list, dt, t) {
+    STR.pluckCool -= dt;
+    /* Whose string it is: the first two fingers down, and only if both landed
+       on water. A finger that has picked a creature up is doing something else
+       with its hand. */
+    var d1 = null, d2 = null, extra = [], i;
+    for (i = 0; i < list.length; i++) {
+      var lp = list[i];
+      if (!lp.down) continue;
+      if (!d1) d1 = lp; else if (!d2) d2 = lp; else extra.push(lp);
+    }
+    /* Whether it may START and whether it may CONTINUE are different
+       questions, and conflating them is what killed the first version. A
+       finger resting on water picks up whatever drifts under it after about a
+       quarter of a second, so on a busy screen both hands would quietly take
+       hold of something and the string would evaporate under them. Measured:
+       it survived fifteen frames out of a hundred and eighty.
+
+       So the decision is made once, when the second finger lands. Nothing in
+       your hands yet means it is a string, and from then until you lift, those
+       two fingers belong to the string - they will not grab and they will not
+       wind up. A hand that is already carrying a creature is doing something
+       else, and gets the pinch it always got. */
+    var pair = !!(d1 && d2 && Math.hypot(d1.x - d2.x, d1.y - d2.y) > 78);
+    var same = STR.on && STR.a === d1 && STR.b === d2;
+    if (same) {
+      if (!pair) strEnd();                 // brought together, or a hand left
+    } else {
+      if (STR.on) strEnd();                // the pair itself changed
+      if (pair && !d1.holding && !d2.holding) {
+        STR.a = d1; STR.b = d2; STR.on = true; STR.amp = 0.30; STR.phase = 0;
+        // a wind-up already under way on either hand yields to it
+        if (d1.charging) { d1.chargeCancelled = true; releaseCharge(d1, t); d1.chargeCancelled = false; }
+        if (d2.charging) { d2.chargeCancelled = true; releaseCharge(d2, t); d2.chargeCancelled = false; }
+        d1.mayCharge = false; d2.mayCharge = false;
+      }
+    }
+
+    var live = STR.on && STR.a && STR.b;
+    STR.k = live ? Math.min(1, STR.k + dt * 3.4) : Math.max(0, STR.k - dt * 2.6);
+    if (STR.k <= 0.001) { if (STR.v) strFree(); return; }
+    if (!live) return;
+
+    var a = STR.a, b = STR.b;
+    var ex = b.x - a.x, ey = b.y - a.y;
+    var d = Math.hypot(ex, ey) || 1;
+    var mx = (a.x + b.x) * 0.5, my = (a.y + b.y) * 0.5;
+
+    /* Distance is pitch, quantised to the scale. Wide is low, which is the way
+       round every stringed thing in the world already works. */
+    /* Across most of the screen rather than half of it. At 0.52 the bottom
+       note arrived barely past the middle of a laptop window and the whole
+       lower half of the scale was unreachable by anyone with short arms. */
+    var u = clamp((d - 78) / Math.max(160, DIAG * 0.72), 0, 1);
+    STR.deg = clamp(Math.round((1 - u) * 9), 0, NOTES.length - 1);
+    STR.f = noteI(STR.deg) * octAt(my);
+    STR.mode = 1 + (STR.deg > 6 ? 2 : (STR.deg > 3 ? 1 : 0));
+    STR.hue = world.hue + 30 + STR.deg * 12;
+
+    /* A hand travelling fast is sweeping, not playing, so the string goes
+       quiet and leaves the rake and the chord to it. Hold still and it sings.
+       Nothing switches mode; it is one number either way. */
+    var hs = (Math.hypot(a.vx, a.vy) + Math.hypot(b.vx, b.vy)) * 0.5;
+    var still = 1 - clamp(hs / 620, 0, 1);
+    var lvl = STR.k * (0.16 + still * 0.84);
+
+    // a third finger through the line
+    for (i = 0; i < extra.length; i++) {
+      var ep = extra[i];
+      var cr = (ep.x - a.x) * ey - (ep.y - a.y) * ex;
+      var pu = ((ep.x - a.x) * ex + (ep.y - a.y) * ey) / (d * d);
+      var sd = cr > 0 ? 1 : -1;
+      if (pu > 0.05 && pu < 0.95 && Math.abs(cr) / d < 90) {
+        if (ep.strSide && ep.strSide !== sd) {
+          strPluck(a.x + ex * pu, a.y + ey * pu, true, t);
+        }
+        ep.strSide = sd;
+      } else ep.strSide = 0;
+    }
+    // and whatever drifts through it on its own
+    for (i = 0; i < creatures.length; i++) {
+      var c = creatures[i];
+      if (c.vit < 0.3) { c.strSide = 0; continue; }
+      var cc = (c.x - a.x) * ey - (c.y - a.y) * ex;
+      var cu = ((c.x - a.x) * ex + (c.y - a.y) * ey) / (d * d);
+      var cs = cc > 0 ? 1 : -1;
+      if (cu > 0.03 && cu < 0.97 && Math.abs(cc) / d < 30) {
+        if (c.strSide && c.strSide !== cs) {
+          strPluck(c.x, c.y, false, t);
+          c.glowAdd = Math.max(c.glowAdd, 0.5);
+        }
+        c.strSide = cs;
+      } else c.strSide = 0;
+    }
+
+    // it never quite stops moving, and a pluck rings out of it
+    STR.amp = Math.max(0.10, STR.amp * Math.pow(0.976, dt * 60));
+    STR.phase += dt * (5 + STR.deg * 1.3);
+
+    // and it drags the water with it, so carrying one carves a wide furrow
+    var msp = (Math.hypot(a.vx, a.vy) + Math.hypot(b.vx, b.vy)) * 0.5;
+    if (msp > 90) {
+      addStir(mx, my, 0.05 * clamp(msp / 800, 0.2, 1) * STR.k, 0.28, 'string');
+    }
+
+    if (!A.ok || !A.started) return;
+    var ac = A.ctx, nt = ac.currentTime;
+    if (!STR.v) {
+      try {
+        var o = ac.createOscillator(); o.type = 'triangle';
+        var lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 1.2;
+        var g = ac.createGain(); g.gain.value = 0.0001;
+        var pn = ac.createStereoPanner ? ac.createStereoPanner() : null;
+        o.connect(lp); lp.connect(g);
+        if (pn) { g.connect(pn); pn.connect(A.bus); } else { g.connect(A.bus); }
+        o.start(nt);
+        STR.v = { o: o, lp: lp, g: g, pn: pn };
+      } catch (e) { STR.v = null; return; }
+    }
+    /* Retuned rather than restruck. The step to the next scale degree is fast
+       enough to hear as a change of note and slow enough not to click. */
+    STR.v.o.frequency.setTargetAtTime(STR.f, nt, 0.045);
+    STR.v.lp.frequency.setTargetAtTime(420 + STR.f * 2.6 + STR.amp * 900, nt, 0.09);
+    STR.v.g.gain.setTargetAtTime(lvl * (0.026 + STR.amp * 0.030), nt, 0.10);
+    if (STR.v.pn) STR.v.pn.pan.setTargetAtTime(panOf(mx) * 0.6, nt, 0.12);
+  }
+
+  /* Drawn on the SCREEN canvas, every frame, from nothing.
+     A held string barely moves, and the trail buffer is never cleared - only
+     veiled - so anything that sits still in it burns a hole. That is the same
+     mistake the planet halo and the ember ring each made once. The sparks a
+     pluck throws off are welcome to the trail, because they travel. */
+  function drawString(awake) {
+    if (STR.k <= 0.004 || !STR.a || !STR.b) return;
+    var a = STR.a, b = STR.b;
+    var ex = b.x - a.x, ey = b.y - a.y;
+    var d = Math.hypot(ex, ey) || 1;
+    var nx = -ey / d, ny = ex / d;
+    var swing = STR.amp * Math.min(d * 0.16, 62) * Math.sin(STR.phase * 6.0);
+    var lit = (0.45 + awake * 0.55) * STR.k;
+    var hue = norm360(STR.hue).toFixed(0);
+    var N = 30, i, u2, off;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    /* Three passes, widest first. The first attempt drew a pixel and a half of
+       core against creatures forty pixels across and simply was not there -
+       the same miss the rockets made. It is the loudest thing you can be doing
+       and it should be the brightest thing on the screen while you do it. */
+    var WIDE = [16, 6, 2.6], ALPH = [0.11, 0.26, 0.90], LIGHT = ['52%', '62%', '78%'];
+    for (var pass = 0; pass < 3; pass++) {
+      ctx.beginPath();
+      for (i = 0; i <= N; i++) {
+        u2 = i / N;
+        off = Math.sin(Math.PI * u2 * STR.mode) * swing;
+        var px2 = (a.x + ex * u2 + nx * off) * DPR;
+        var py2 = (a.y + ey * u2 + ny * off) * DPR;
+        if (i) ctx.lineTo(px2, py2); else ctx.moveTo(px2, py2);
+      }
+      ctx.lineWidth = WIDE[pass] * DPR;
+      ctx.strokeStyle = 'hsla(' + hue + ',94%,' + LIGHT[pass] + ',' +
+                        (ALPH[pass] * lit).toFixed(3) + ')';
+      ctx.stroke();
+    }
+    // the two ends are where your hands are, so they get a knot of light
+    for (i = 0; i < 2; i++) {
+      var e2 = i ? b : a;
+      ctx.beginPath();
+      ctx.arc(e2.x * DPR, e2.y * DPR, (13 + STR.amp * 9) * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + hue + ',94%,58%,' + (0.15 * lit).toFixed(3) + ')';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(e2.x * DPR, e2.y * DPR, (5 + STR.amp * 5) * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + hue + ',96%,78%,' + (0.60 * lit).toFixed(3) + ')';
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* ============================================================
+     THE ECHO
+     ------------------------------------------------------------
+     Tap a few times and then stop. After a moment a small light appears where
+     you first touched, travels to each of the other places in turn, arriving
+     exactly on your rhythm, and sounds each one an octave up. Then it goes.
+
+     This is the only thing in the app that takes a turn. Everything else is
+     simultaneous - you act, it answers, at once - and this waits for you to
+     finish, repeats what you did, and hands it back. That is worth having for
+     this audience in particular, and it is worth having ONLY if it never nags:
+     it needs a real silence first, it fires on about half the chances it gets,
+     it will not come round again for a good while, and the instant you touch
+     the screen it stops dead and the turn is yours again.
+
+     It replays your PLACES, so it also replays your pitches - the notes come
+     out of noteIdxAt and octAt exactly as yours did. It is your phrase, an
+     octave higher, in the bell that was built to always be audible.
+     ============================================================ */
+  var ECHO = {
+    taps: [], on: false, i: 0, next: 0, cool: 0, x: 0, y: 0, k: 0
+  };
+  var ECHO_MAX = 6;
+
+  function echoNote(x, y) {
+    if (!A.ok || !A.started) return;
+    asNote(function () { playTouchNote(x, y, 0.32); });
+  }
+
+  function echoStop() { ECHO.on = false; ECHO.k = 0; }
+
+  function updateEcho(dt, t, fingers) {
+    ECHO.cool -= dt;
+    /* Your turn always wins. Note what this does NOT do: it does not throw the
+       taps away. It used to, and a phrase is played with the finger DOWN, so
+       every tap wiped the one before it and the app never held more than one -
+       measured, four taps in and the list had a single entry. Forgetting is
+       only right when you interrupt the reply, which is you taking the turn
+       back. */
+    if (fingers > 0) {
+      if (ECHO.on) { echoStop(); ECHO.taps.length = 0; }
+      return;
+    }
+    if (ECHO.on) {
+      ECHO.k = Math.min(1, ECHO.k + dt * 4);
+      ECHO.next -= dt;
+      var tgt = ECHO.taps[ECHO.i];
+      if (!tgt) { echoStop(); return; }
+      // the light slides to the next place and arrives on the beat
+      var ease = 1 - Math.pow(0.0025, dt);
+      ECHO.x += (tgt.x - ECHO.x) * ease;
+      ECHO.y += (tgt.y - ECHO.y) * ease;
+      if (ECHO.next <= 0) {
+        ECHO.x = tgt.x; ECHO.y = tgt.y;
+        echoNote(tgt.x, tgt.y);
+        wave(tctx, tgt.x, tgt.y, 16, world.hue + 90, 0.16);
+        blob(tctx, tgt.x, tgt.y, 9, world.hue + 120, 0.30);
+        for (var q = 0; q < 5; q++) {
+          var ang = Math.random() * TAU, sp = 60 + Math.random() * 90;
+          emitSpark(tgt.x, tgt.y, Math.cos(ang) * sp, Math.sin(ang) * sp,
+                    world.hue + 100 + rnd(-25, 25), 0.5);
+        }
+        ECHO.i++;
+        var nx2 = ECHO.taps[ECHO.i];
+        if (!nx2) { echoStop(); return; }
+        ECHO.next = nx2.gap;
+      }
+      return;
+    }
+
+    // taps only belong to the same phrase if they were close together in time
+    var taps = ECHO.taps;
+    while (taps.length && t - taps[taps.length - 1].t > 4.5) taps.length = 0;
+    if (taps.length < 3 || ECHO.cool > 0 || world.sleep > 0.5) return;
+    var quiet = t - taps[taps.length - 1].t;
+    if (quiet < 1.35) return;
+    if (quiet > 2.6) { taps.length = 0; return; }        // the moment has passed
+    var span = taps[taps.length - 1].t - taps[0].t;
+    if (span < 0.5) { taps.length = 0; return; }         // a double tap is not a rhythm
+
+    ECHO.cool = 26;
+    if (Math.random() < 0.45) { taps.length = 0; return; }   // not every time
+
+    /* Slightly quicker than you played it, which is what makes it read as an
+       answer rather than as a recording. */
+    var seq = [];
+    for (var i = 0; i < taps.length; i++) {
+      seq.push({ x: taps[i].x, y: taps[i].y,
+                 gap: i ? clamp((taps[i].t - taps[i - 1].t) * 0.86, 0.10, 1.5) : 0 });
+    }
+    ECHO.taps = seq; ECHO.on = true; ECHO.i = 0; ECHO.next = 0; ECHO.k = 0;
+    ECHO.x = seq[0].x; ECHO.y = seq[0].y;
+  }
+
+  function drawEcho(awake) {
+    if (!ECHO.on) return;
+    var lit = (0.5 + awake * 0.5) * ECHO.k;
+    var hue = norm360(world.hue + 100).toFixed(0);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath();
+    ctx.arc(ECHO.x * DPR, ECHO.y * DPR, 4.5 * DPR, 0, TAU);
+    ctx.fillStyle = 'hsla(' + hue + ',96%,76%,' + (0.75 * lit).toFixed(3) + ')';
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(ECHO.x * DPR, ECHO.y * DPR, 11 * DPR, 0, TAU);
+    ctx.fillStyle = 'hsla(' + hue + ',92%,60%,' + (0.16 * lit).toFixed(3) + ')';
+    ctx.fill();
+    ctx.restore();
+    blob(tctx, ECHO.x, ECHO.y, 3.6, world.hue + 110, 0.16 * lit);
+  }
+
   function pokeCreature(c, px, py, t) {
     world.poked++;
     if (c.elder) {
@@ -10003,13 +10371,13 @@
             p.chargeCancelled = false;
           }
           p.mayCharge = false;
-          beginGrab(p, gc, t);
+          if (!strOwns(p)) beginGrab(p, gc, t);
         }
       }
       /* And only now, with that settled, does a wind-up begin. Its clock is
          backdated to the moment of contact so a hold reaches full in the same
          time it always did. */
-      if (p.mayCharge && p.down && !p.holding && !p.charging &&
+      if (p.mayCharge && p.down && !p.holding && !p.charging && !strOwns(p) &&
           (t - p.downAt) > 0.30) {
         p.mayCharge = false;
         /* It landed on open water and it stayed put, so it winds up - full
@@ -10076,6 +10444,8 @@
         };
       })(voices, base, oc, pan3, leadSp));
     }
+    updateString(list, dt, t);
+    updateEcho(dt, t, swN);
     updatePinch(list, t);
     updateErosion(list, dt, t);
     updateWorldSpawn(dt, t);
@@ -10950,6 +11320,8 @@
 
     drawBubbles(t);
     drawEmbers();
+    drawString(awake);
+    drawEcho(awake);
     drawWear(t);
     /* NIGHT: a veil over the finished frame, then the controls on top of it.
        Order matters both ways round. Under the veil the moon and the speaker
