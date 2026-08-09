@@ -8131,31 +8131,54 @@
      the energy to lift itself out again.
      ============================================================ */
   var STONES = [];
-  var STONE_MAX = 26;
+  var STONE_MAX = 14;
   /* Where each stone touched down, drawn the way the echo's replies are drawn:
-     a ring opening out on the SCREEN canvas over most of a second.
-
-     The first version put a small faint wave straight into the trail buffer
-     and moved on within a tenth of a second, which is neither long enough to
-     watch nor bright enough to see - a skipped stone is a thing you follow
-     across the water, and it was over before your eye arrived. */
+     a ring opening out on the SCREEN canvas over most of a second. */
   var SPLASH = [];
+
+  /* A stone is a POINT OF LIGHT that travels, and the rings are what it leaves
+     behind as it goes.
+     ------------------------------------------------------------
+     The first version jumped straight from one touchdown to the next with
+     nothing in between, so what you saw was a row of rings appearing rather
+     than an object crossing the field - and a row of rings has no direction to
+     it. It also put the first ring on the planet's own edge, which read as the
+     planet doing something rather than as something leaving.
+
+     So: the light launches clear of the surface, carries a good way before it
+     first touches, and from then on both the distance AND the time between
+     touches shrink together - which is what makes a real stone read as a
+     stone, because it is losing the energy to lift itself out again. It ends
+     in a flurry of rings almost on top of each other, and the light goes out
+     there. */
+  var STONE_GAP_DECAY = 0.70;     // each hop is this fraction of the last
+  var STONE_SPEED_DECAY = 0.86;   // and it is travelling this much slower
 
   function skipStones(big, t) {
     var R = worldR(big);
-    var n = 2 + ((Math.random() * 4) | 0);
+    var n = 2 + ((Math.random() * 3) | 0);
     var voice = 0;
     for (var i = 0; i < n && STONES.length < STONE_MAX; i++) {
       var ang = Math.random() * TAU;
-      var gap = rnd(90, 150);
+      var dx = Math.cos(ang), dy = Math.sin(ang);
+      /* Off the surface before anything happens, and the first touch is a long
+         way further still. A stone thrown flat skips its longest first. */
+      /* Sized to the screen, not to a constant. The whole run is the first
+         gap over one minus the decay, about three and a third times it, and it
+         has to finish where you can still see it - a stone that leaves the
+         edge never gets to slow down and settle, which is the part worth
+         watching. */
+      var gap = clamp(rnd(0.13, 0.20) * Math.min(W, H), 85, 190);
+      var speed = gap / rnd(0.45, 0.60);
       STONES.push({
-        x: big.x + Math.cos(ang) * R * 0.95, y: big.y + Math.sin(ang) * R * 0.95,
-        dx: Math.cos(ang), dy: Math.sin(ang),
-        gap: gap, decay: rnd(0.66, 0.80),
-        wait: 0, hops: 5 + ((Math.random() * 5) | 0),
+        x: big.x + dx * (R + 14), y: big.y + dy * (R + 14),
+        dx: dx, dy: dy,
+        togo: gap,                    // distance still to run before it touches
+        gap: gap, speed: speed,
+        hops: 9 + ((Math.random() * 4) | 0),   // enough to reach the flurry
         hue: world.hue + big.hueOff + rnd(10, 60),
         deg: 2 + ((Math.random() * 5) | 0),
-        sound: voice++ < 2
+        fade: 1, sound: voice++ < 2
       });
     }
     flash(big.x, big.y, world.hue + big.hueOff + 30, R * 1.1, 0.16);
@@ -8164,14 +8187,25 @@
   function updateStones(dt, t) {
     for (var i = STONES.length - 1; i >= 0; i--) {
       var st = STONES[i];
-      st.wait -= dt;
-      if (st.wait > 0) continue;
-      // it comes down: a ring opening on the water, and the next hop is shorter
-      var k = clamp(st.gap / 150, 0.15, 1);
+      if (st.hops <= 0) {                    // spent: the light goes out
+        st.fade -= dt * 2.4;
+        if (st.fade <= 0) { STONES.splice(i, 1); continue; }
+        continue;
+      }
+      var step = st.speed * dt;
+      st.x += st.dx * step; st.y += st.dy * step;
+      st.togo -= step;
+      // a wisp behind it, safe in the trail because it is moving
+      blob(tctx, st.x, st.y, 2.2, st.hue + 30, 0.07);
+      if (st.togo > 0) {
+        if (st.x < -60 || st.x > W + 60 || st.y < -60 || st.y > H + 60) STONES.splice(i, 1);
+        continue;
+      }
+      // it touches down
+      var k = clamp(st.gap / 185, 0.15, 1);
       SPLASH.push({ x: st.x, y: st.y, hue: st.hue, k: k, t: 0,
                     life: 0.55 + k * 0.45 });
       if (SPLASH.length > 40) SPLASH.shift();
-      blob(tctx, st.x, st.y, 2.5 + k * 3, st.hue + 30, 0.10 + k * 0.10);
       addStir(st.x, st.y, 0.03 * k * (Math.random() < 0.5 ? -1 : 1), 0.14);
       if (st.sound && A.ok && A.started) {
         var sf = noteI(st.deg) * (k > 0.5 ? 1 : 2);
@@ -8179,17 +8213,18 @@
         ambient(function () { drop(sf, sv, sp2); });
       }
       st.hops--;
-      if (st.hops <= 0 || st.gap < 12) {
+      if (st.hops <= 0) {
+        // the last one, and it sinks
         SPLASH.push({ x: st.x, y: st.y, hue: st.hue + 40, k: 1, t: 0, life: 1.1 });
-        STONES.splice(i, 1); continue;
+        continue;
       }
-      st.x += st.dx * st.gap; st.y += st.dy * st.gap;
-      st.gap *= st.decay;
-      /* Slower, and it still accelerates. The hops used to run from about a
-         quarter of a second down to a twentieth, which is the right SHAPE and
-         far too quick to follow - the last four landed as a single flicker. */
-      st.wait = 0.24 + st.gap * 0.0030;
-      if (st.x < -40 || st.x > W + 40 || st.y < -40 || st.y > H + 40) STONES.splice(i, 1);
+      /* Both shrink, which is the whole of it. Distance falls by a third and
+         speed by a seventh, so the TIME between touches falls too - the rings
+         come faster and faster as it runs out. */
+      st.gap *= STONE_GAP_DECAY;
+      st.speed *= STONE_SPEED_DECAY;
+      st.togo = st.gap;
+      if (st.gap < 7) st.hops = 0;
     }
   }
 
@@ -8295,6 +8330,25 @@
         ctx.beginPath();
         ctx.arc(sp3.x * DPR, sp3.y * DPR, (2 + sf * 6 * big2) * DPR, 0, TAU);
         ctx.fillStyle = 'hsla(' + sh + ',98%,88%,' + (0.95 * sf * sf * lit).toFixed(3) + ')';
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    // and the stones themselves: the thing you actually follow
+    if (STONES.length) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (i = 0; i < STONES.length; i++) {
+        var stn = STONES[i];
+        var sfd = clamp(stn.fade, 0, 1);
+        var shh = norm360(stn.hue + 20).toFixed(0);
+        ctx.beginPath();
+        ctx.arc(stn.x * DPR, stn.y * DPR, 14 * sfd * DPR, 0, TAU);
+        ctx.fillStyle = 'hsla(' + shh + ',96%,60%,' + (0.20 * sfd * lit).toFixed(3) + ')';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(stn.x * DPR, stn.y * DPR, 4.2 * sfd * DPR, 0, TAU);
+        ctx.fillStyle = 'hsla(' + shh + ',98%,88%,' + (0.95 * sfd * lit).toFixed(3) + ')';
         ctx.fill();
       }
       ctx.restore();
