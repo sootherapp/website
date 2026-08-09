@@ -2585,7 +2585,7 @@
      so a shaky tap still answers with the pitch of the spot you aimed
      at - one place, one note. */
 
-  /* The SOAP DROP used to live here: two quick taps on open water and
+  /* The SOAP DROP used to live here: two quick taps on open space and
      everything within three hundred pixels darted outwards.
      ------------------------------------------------------------
      It is gone because it was standing on the echo's foot. A phrase is tapped,
@@ -2617,7 +2617,7 @@
     /* Remembered, in case you are playing a phrase. Only taps that got this
        far: a press on a lit note or a bubble has already been answered in its
        own way, and repeating those would be repeating the wrong thing. */
-    /* A phrase can only BEGIN in open water. Tapping a creature or a planet
+    /* A phrase can only BEGIN in open space. Tapping a creature or a planet
        over and over is a conversation with that creature - it is answering you
        in its own voice each time - and having the room then repeat your
        drumming back at you is one answer too many. Only the first tap is
@@ -2665,7 +2665,7 @@
       /* Only count it against them if there was something to hit. Tapping bare
          canvas is how the surface is played - it is not a failed attempt at
          anything, and counting it was slowly widening every creature's reach
-         until there was no open water left to press on. */
+         until there was no open space left to press on. */
       if (nearestCreature(p.tapX, p.tapY, 150)) aimMiss++;
       /* Low down the ladder a press that found nothing still wakes whatever
          was nearest, so it is not possible to miss - which for a child who
@@ -2958,7 +2958,7 @@
      allows? The halo is deliberately about twice the visible body, because a
      child aiming at a small drifting shape needs the room - but it means that
      on a screen with fifty creatures there is hardly anywhere left that counts
-     as open water, and the wind-up could almost never start. Measured: a press
+     as open space, and the wind-up could almost never start. Measured: a press
      forty pixels clear of anything still grabbed every single time.
 
      So the halo stays, and the two gestures are told apart by what the hand
@@ -2990,7 +2990,7 @@
          can be touched where it now is rather than where it used to be. */
       var sz = c.size * LAYERS[c.L].size * (0.85 + c.mood * 0.3);
       /* Generosity, earned by missing or handed over by the level - but only
-         when the caller wants it. Anything asking "is this open water?" has to
+         when the caller wants it. Anything asking "is this open space?" has to
          ask strictly, or helping someone find creatures quietly destroys the
          ability to press on nothing, which is its own gesture. */
       var give = pad + (strict ? 0 : assist * 90 + (LEVEL <= 1 ? 70 : 0));
@@ -6989,7 +6989,7 @@
   /* ============================================================
      THE STRING
      ------------------------------------------------------------
-     Put two fingers on open water and a line is stretched between them. It
+     Put two fingers on open space and a line is stretched between them. It
      sounds for as long as you hold it, and how far apart your hands are IS the
      pitch: close together is high, spread wide is low. Everything else here
      answers a touch and then decays; this is the one thing you play.
@@ -7007,7 +7007,7 @@
      in the world, not a control drawn over the top of it, and if you hold one
      still for long enough the room comes and plays it for you.
 
-     Two fingers on open water were doing nothing before this. The pinch
+     Two fingers on open space were doing nothing before this. The pinch
      gesture needs a creature under each finger, so there is no collision -
      hands on creatures pinch, hands on water make a string.
      ============================================================ */
@@ -7033,7 +7033,23 @@
      ============================================================ */
   var ANCHOR_DWELL = 0.15;    // still for this long
   var ANCHOR_SLOP = 34;       // and it has not wandered more than this
-  var ANCHOR_FLEE = 470;      // and it drops out again if it takes off
+  /* ...and then it is an anchor until it leaves the glass. There is no speed
+     at which it stops being one.
+
+     There used to be: over about 470 pixels a second a finger was taken to
+     have set off, dropped out of the web and could not rejoin. It reads
+     sensibly and it is wrong, and it is wrong in exactly the way this file has
+     been wrong twice before - whether something may START and whether it may
+     CONTINUE are different questions, and answering the second with the test
+     for the first is what tore the two-finger bridge apart when a creature
+     drifted under a hand. Measured here: four fingers placed, then carried
+     about at a gentle two hundred pixels a second, and the web was down to one
+     anchor and no threads inside four seconds, with every finger still on the
+     glass.
+
+     A finger that never settled is a sweep for its whole life and can strum. A
+     finger that did settle is holding the instrument, and moving your hands is
+     how you play it, not how you drop it. */
 
   var ANCH = [], SWIPERS = [], PTR_LIST = [];
 
@@ -7054,10 +7070,7 @@
     for (var i = 0; i < list.length; i++) {
       var p = list[i];
       if (!p.down) { p.anchor = false; p.anchorDead = false; continue; }
-      if (p.anchor) {
-        // a hand that leaves is a hand that leaves, no hysteresis needed
-        if (Math.hypot(p.vx, p.vy) > ANCHOR_FLEE) { p.anchor = false; p.anchorDead = true; }
-      } else if (!p.anchorDead) {
+      if (!p.anchor && !p.anchorDead) {
         if (p.path > ANCHOR_SLOP) p.anchorDead = true;          // it never stopped
         else if (t - p.downAt >= ANCHOR_DWELL) p.anchor = true; // it did
       }
@@ -9409,7 +9422,7 @@
   }
 
   /* ---- gathering a ripple ---------------------------------
-     Press on open water and nothing happens yet: you are winding it
+     Press on open space and nothing happens yet: you are winding it
      up. The longer you hold before letting go, the more energy the
      wave carries, the further it reaches, the more creatures it is
      allowed to touch, and the deeper the answering cascade runs. A
@@ -10506,20 +10519,20 @@
        setting out to carry a creature fired the prod first and the carry
        second - you got both and could aim neither - and a swipe sounded
        a note it had no business sounding. What this touch turns out to
-       be is decided when it ends, by finishTap. A press in open water
+       be is decided when it ends, by finishTap. A press in open space
        still answers at once, with the rising tone of its charge. */
     /* Permission to wind up is granted on the same test the frame loop uses
        to decide a grab, and for the same reason. It used to be granted only
        when the hit test found nothing at all - and that test reaches about
        twice the visible body, so a press forty pixels clear of anything was
        still "on" a creature and could never wind up. On a screen with fifty
-       of them there was hardly a square inch of real open water left, which
+       of them there was hardly a square inch of real open space left, which
        is why long presses so often did nothing. Landing in the halo is now
        undecided rather than taken, and undecided may become a wave. */
     if (c && onBody(c, p.x, p.y)) {
       for (var i = 0; i < 5; i++) emitSpark(c.x, c.y, 0, 0, hue, 0.35);
     } else {
-      // open water, or near enough: this MIGHT become a wind-up, but not yet -
+      // open space, or near enough: this MIGHT become a wind-up, but not yet -
       // see the frame loop, which starts it once the press has settled what it is
       p.mayCharge = true;
       for (var j = 0; j < 5; j++) emitSpark(p.x, p.y, 0, 0, hue, 0.35);
@@ -11066,10 +11079,10 @@
            TO depends on where the press landed:
 
            - on a creature: it is yours, look no further
-           - on open water with nothing winding up: look again and look wider,
+           - on open space with nothing winding up: look again and look wider,
              since a near miss on something you were clearly aiming at should
              still pick it up
-           - on open water WITH a charge running: your intent is not in doubt,
+           - on open space WITH a charge running: your intent is not in doubt,
              and one wandering across your finger must not quietly cancel it.
              Only now and then is one bold enough to take it, and then it has
              to be properly on top of you, not merely nearby. */
@@ -11077,7 +11090,7 @@
            on in the meantime - but at the SAME reach, not a wider one. A
            second, wider search was quietly claiming most of the canvas.
 
-           Once a wind-up is actually running the press landed on open water
+           Once a wind-up is actually running the press landed on open space
            and there is no doubt what you meant, so something wandering across
            your finger must not cancel it. Just occasionally one is bold
            enough to take it, and then it has to be properly on top of you. */
@@ -11121,7 +11134,7 @@
       if (p.mayCharge && p.down && !p.holding && !p.charging && nDown < 2 &&
           (t - p.downAt) > 0.30) {
         p.mayCharge = false;
-        /* It landed on open water and it stayed put, so it winds up - full
+        /* It landed on open space and it stayed put, so it winds up - full
            stop. Whether something has since drifted across is not relevant;
            checking made a creature wandering past able to cancel your wave. */
         if (p.chargeDist <= 38) {
@@ -11286,8 +11299,8 @@
        what counts as a hit. It settles back once they are landing again, so
        a child who is getting the hang of it is not helped forever. */
     /* Only where it has been asked for. Widening every creature's reach helps
-       somebody who cannot aim, but it does it by eating the open water - and
-       open water is not empty, it is the instrument. At the top of the ladder
+       somebody who cannot aim, but it does it by eating the open space - and
+       open space is not empty, it is the instrument. At the top of the ladder
        that trade is wrong twice over: the place-notes stop sounding because
        the tap gets captured by a creature, and a wind-up cannot find anywhere
        to start. So the default experience never widens anything. */

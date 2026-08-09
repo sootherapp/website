@@ -39,12 +39,11 @@ Nothing here has to be learned, and nothing has to be done accurately.
 
 | Do this | And this happens |
 | --- | --- |
-| **Tap open water** | The note of that spot sounds and a ripple spreads |
+| **Tap open space** | The note of that spot sounds and a ripple spreads |
 | **Tap a creature** | It answers in its own voice, one of a dozen different ways |
-| **Tap twice quickly** | A soap drop bursts and pushes everything nearby out of the way |
 | **Press and hold** | You wind up a wave. Rings contract inward and creatures spiral in; let go and it releases |
 | **Drag a creature** | Pick it up and carry it. Let go and it drifts on |
-| **Swipe** | You disturb the water. Fast swipes scatter, gentle ones draw creatures along |
+| **Swipe** | You disturb the field. Fast swipes scatter, gentle ones draw creatures along |
 | **Draw a shape** | The stroke is measured on release: a closed loop gathers what it encircled, a long straight cuts a current, a scribble churns, a spiral leaves a whirlpool, a zigzag throws sparks |
 | **Tap a lit diamond** | Plays the phrase it belongs to. Untouched phrases play themselves eventually |
 | **Pop a bubble** | Bubbles drift up in rafts and pop when touched |
@@ -54,14 +53,23 @@ Nothing here has to be learned, and nothing has to be done accurately.
 The app tells the difference between a finger **placed and left** and a finger
 **travelling**, and that single distinction drives everything below.
 
+It is decided once, when the finger lands, and then it holds until that finger
+lifts. A finger that settled is holding the instrument, so you can carry your
+hands anywhere on the screen as fast as you like and the web comes with you,
+stretching and changing pitch as it goes. A finger that arrived already moving
+is a sweep for its whole life, even if it stops, so it can strum but it can
+never accidentally join in.
+
 | Do this | And this happens |
 | --- | --- |
 | **Place two fingers and hold** | A thread stretches between them and sings continuously. How far apart your hands are is the pitch: wide is low, close is high |
 | **Place three or more** | The threads join into a web and a **beat** starts, playing the notes of the places you are touching. Each finger keeps its own colour so a child can point and say which light is theirs |
 | **Swipe across the threads** | You strum them. Every thread you cross flares thick and settles back |
-| **Sweep with a whole hand** | The water is raked into furrows, one per finger, and a chord sounds. More fingers means a bigger chord |
-| **Pinch two creatures together** | They pair up and do something together |
-| **Pull one creature apart** | It comes apart |
+| **Sweep with a whole hand** | The field is raked into furrows, one per finger, and a chord sounds. More fingers means a bigger chord |
+
+**Known not to work reliably:** pinching two creatures together to pair them,
+and pulling one apart to split it. Both are in the code, but neither is
+dependable in the hand. Left undocumented as a feature until that is fixed.
 
 ### The beat, in more detail
 
@@ -82,7 +90,7 @@ while you are there.
 
 ### The echo
 
-Tap a rhythm in open water and then stop. After a moment a light appears where
+Tap a rhythm in open space and then stop. After a moment a light appears where
 you first touched, travels to each place in turn arriving on your rhythm, and
 sounds each one an octave up. Sometimes it replays the same figure somewhere
 else on the screen, which transposes it.
@@ -90,7 +98,7 @@ else on the screen, which transposes it.
 - It answers **every** phrase, up to 32 taps long.
 - It will not speak until you have genuinely stopped.
 - Touch anything and it stops mid-note. The turn is yours again.
-- A phrase can only **begin** in open water. Drumming on a creature is a
+- A phrase can only **begin** in open space. Drumming on a creature is a
   conversation with that creature, and does not seed one.
 
 ---
@@ -111,7 +119,7 @@ else on the screen, which transposes it.
 
   | Planet | Tap it and |
   | --- | --- |
-  | Rocky (icy poles) | It skips stones out across the water. Each hop is shorter than the last until they sink |
+  | Rocky (icy poles) | It skips stones out across the field. Each hop is shorter than the last until they sink |
   | Banded | It launches rockets. Some burst early, some get a long way out, some corkscrew, some never leave |
   | Ringed | It puts up a firework: one shell, a clean rise, a proper ring |
   | Dotted | It sends one arc of light out to a creature, which lights up and sometimes passes it on, and on again |
@@ -164,7 +172,7 @@ aim is not locked out of it.
 | `2` | **Touching.** The direct mechanics only: tapping and carrying. No drawn shapes, no piles |
 | `3` | **Everything.** The whole thing. The default |
 
-It is also adaptive. If presses keep landing on empty water, the app quietly
+It is also adaptive. If presses keep landing on empty space, the app quietly
 becomes more generous about what counts as a hit.
 
 ### Museum mode, in practice
