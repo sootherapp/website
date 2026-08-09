@@ -179,6 +179,15 @@
      ============================================================ */
   var VOLUME = 1;
   var KIOSK = false;
+  /* MUSEUM MODE. Set your night mode, your mute and your activity level the
+     ordinary way, then send the room to /full - it keeps every one of those
+     settings, because they live in this browser's own storage and not in the
+     address, and it simply takes the three controls off the screen so that
+     nobody can move them. Fullscreen and the back-gesture guard come with it.
+     Undoing it is a matter of going back to the plain address on that device;
+     there is deliberately no way out from inside the page, which is the whole
+     point of putting a screen in front of a crowd. */
+  var LOCKED = false;
 
   /* ---- and the same things settable per installation -------------
      There is no screen furniture to hang a setting on and there never will
@@ -187,6 +196,9 @@
 
        ?vol=0..100   master level
        ?kiosk=1      unattended install: fullscreen, back gesture swallowed
+       /full         museum mode: keeps the settings this browser already has
+                     and takes the three controls away. ?full and #full do the
+                     same, for hosts that will not serve the bare path.
        ?level=0..3   how much has to be aimed at - see LADDER below
        ?scan=1       single switch: a highlight travels, one press takes it
        ?scan=2       two switches: one key moves it, the other takes it
@@ -202,6 +214,13 @@
     }
     if (Q.vol !== undefined) VOLUME = clamp(parseFloat(Q.vol) / 100, 0, 1);
     if (Q.kiosk === '1') KIOSK = true;
+    /* Three ways in, because a museum will be handed whichever one is easiest
+       to type into whatever is running the screen: the tidy path, a query, or
+       a hash for hosts that will not serve an extra path. */
+    if (Q.full !== undefined || location.hash === '#full' ||
+        /(^|\/)full\/?$/.test(location.pathname)) {
+      LOCKED = true; KIOSK = true;
+    }
   })();
 
   /* ============================================================
@@ -2566,106 +2585,20 @@
      so a shaky tap still answers with the pitch of the spot you aimed
      at - one place, one note. */
 
-  /* ============================================================
-     THE SOAP DROP
+  /* The SOAP DROP used to live here: two quick taps on open water and
+     everything within three hundred pixels darted outwards.
      ------------------------------------------------------------
-     Two quick taps on open water and everything nearby darts outwards, the way
-     pepper on water scatters the instant a drop of washing-up liquid touches
-     it. Surface tension is what was holding it all in place; the drop breaks
-     the tension underneath the drop, and everything is pulled away by the
-     tension that is still there further out.
+     It is gone because it was standing on the echo's foot. A phrase is tapped,
+     and any two of those taps landing near each other inside four tenths of a
+     second were swallowed by this gesture, which consumed the tap and returned
+     before the echo ever saw it - so the more rhythmically you tapped, the
+     less likely the app was to answer you.
 
-     It is over in about a second. The point is the ONE quick outward dart and
-     then everything drifting back to what it was doing - if it lingered it
-     would be a shove, and there is already a shove.
-
-     It is also the only gesture here that makes room rather than filling it,
-     which is worth having in something meant for a child who has had enough of
-     everything happening at once.
+     Two features wanted the same input and the quieter one was winning. The
+     echo is worth more: it answers every time it fires, and what it does with
+     a phrase cannot be got any other way, whereas scattering the neighbours is
+     something a swipe already does.
      ============================================================ */
-  var lastTap = { x: -9999, y: -9999, t: -9 };
-  var SOAP = [];
-
-  function soapDrop(x, y, t) {
-    SOAP.push({ x: x, y: y, t: 0, life: 1.1, hue: world.hue + rnd(20, 90) });
-    if (SOAP.length > 3) SOAP.shift();
-    earnBubbles(0.26, x, y);
-    var reach = 320;
-    for (var i = 0; i < creatures.length; i++) {
-      var c = creatures[i];
-      if (c.vit < 0.3 || c.held || c.hush > 0 || c.world) continue;
-      var dx = c.x - x, dy = c.y - y;
-      var d = Math.hypot(dx, dy);
-      if (d > reach || d < 0.5) continue;
-      var u = d / reach;
-      c.freeT = Math.max(c.freeT, 1.2);       // briefly out of any orbit's grip
-      if (c.cool <= 0) {
-        startReaction(c, pick(['shy', 'flutter', 'scamper', 'shiver']),
-                      0.35 + (1 - u) * 0.5, world.hue + c.hueOff, t, null);
-      }
-      for (var q = 0; q < 3; q++) {
-        emitSpark(c.x, c.y, (dx / d) * 70, (dy / d) * 70,
-                  world.hue + c.hueOff + rnd(-30, 30), 0.4);
-      }
-    }
-    // the water itself is pushed out of the way too
-    addStir(x, y, 0.07, 0.3);
-    if (A.ok && A.started) {
-      var b = clamp(Math.round((1 - y / Math.max(1, H)) * (NOTES.length - 1)), 1, NOTES.length - 4);
-      mine(function () {
-        breath(noteI(b) * 0.5, 0.03, panOf(x), 0.35, 4);
-        soon(0.09, function () { chime(noteI(b + 3) * octAt(y), 0.02, panOf(x), 0.7, 2.2); });
-      });
-    }
-  }
-
-  /* The push is a FIELD that lives for about half a second, not a single kick.
-     One impulse measured out at six creatures of twenty-one actually moving
-     outwards - it is damped within a few frames and swamped by whatever each
-     one was already doing. Half a second of steady outward acceleration reads
-     as the whole patch clearing at once, which is the thing being imitated,
-     and it is still over almost immediately. */
-  var SOAP_PUSH = 0.5;
-
-  function updateSoap(dt) {
-    for (var i = SOAP.length - 1; i >= 0; i--) {
-      var e = SOAP[i];
-      e.t += dt;
-      if (e.t < SOAP_PUSH) {
-        var ramp = 1 - e.t / SOAP_PUSH;
-        var reach = 320;
-        for (var q = 0; q < creatures.length; q++) {
-          var c = creatures[q];
-          if (c.vit < 0.3 || c.held || c.hush > 0 || c.world) continue;
-          var dx = c.x - e.x, dy = c.y - e.y;
-          var d = Math.hypot(dx, dy);
-          if (d > reach || d < 0.5) continue;
-          var u = d / reach;
-          // strongest just off the middle: the film tears from the drop's edge
-          var kk = Math.sin(Math.min(1, u * 1.35) * Math.PI * 0.8) * (1 - u * 0.45);
-          var a = 1500 * kk * ramp;
-          c.vx += (dx / d) * a * dt;
-          c.vy += (dy / d) * a * dt;
-        }
-      }
-      if (e.t > e.life) SOAP.splice(i, 1);
-    }
-  }
-
-  function drawSoap(t) {
-    for (var i = 0; i < SOAP.length; i++) {
-      var e = SOAP[i];
-      var k = e.t / e.life;
-      var fade = (1 - k) * (1 - k);
-      // a thin front running out fast, and a clear space left behind it
-      var r = 20 + Math.sqrt(k) * 300;
-      wave(tctx, e.x, e.y, r, e.hue + 30, 0.13 * fade);
-      wave(tctx, e.x, e.y, r * 0.82, e.hue + 70, 0.07 * fade);
-      if (k < 0.4) {
-        blob(tctx, e.x, e.y, 14 + k * 40, e.hue + 90, 0.1 * (1 - k / 0.4));
-      }
-    }
-  }
 
   function finishTap(p, t) {
     if (p.holding || p.strokeOn) return;
@@ -2679,24 +2612,8 @@
     if (sqHit) { playSeq(sqHit, t); return; }
     if (p.popped || p.onBubble) return;      // it was a pop, and only a pop
     if (Math.hypot(p.x - (p.tapX || p.x), p.y - (p.tapY || p.y)) > 26) return;
-    /* Two taps in the same place, quickly, on nothing in particular. Checked
-       before anything else answers, and it consumes the tap so you do not get a
-       place-note on top of it. */
     var tx0 = p.tapX === undefined ? p.x : p.tapX;
     var ty0 = p.tapY === undefined ? p.y : p.tapY;
-    /* "On nothing" means the same thing here as it does for the wind-up: not
-       squarely on a creature's body. Asking creatureAt as well - even strictly -
-       ruled out most of a busy screen, so the gesture could only be performed
-       in the emptiest corners, which is exactly where there is nothing for it
-       to push. Same lesson as the long press, in a different place. */
-    if (!p.onBody) {
-      if (t - lastTap.t < 0.42 && Math.hypot(tx0 - lastTap.x, ty0 - lastTap.y) < 90) {
-        lastTap.t = -9;
-        soapDrop(tx0, ty0, t);
-        return;
-      }
-      lastTap.x = tx0; lastTap.y = ty0; lastTap.t = t;
-    }
     /* Remembered, in case you are playing a phrase. Only taps that got this
        far: a press on a lit note or a bubble has already been answered in its
        own way, and repeating those would be repeating the wrong thing. */
@@ -3720,6 +3637,10 @@
   }
   // a generous target - the icons are small on purpose, the reach for them is not
   function ctrlAt(x, y) {
+    /* One gate for the whole control surface. Every press on any of the three
+       arrives through here, so locking it here locks all of them - there is no
+       second path to keep in step with this one. */
+    if (LOCKED) return null;
     // while the slider is open its track takes presses before anything else
     if (paceUI.open) {
       var tr = paceTrack();
@@ -4129,6 +4050,7 @@
      the shared object, so it keeps one here. */
   var paceCtrlK = 0;
   function drawCtrls(t) {
+    if (LOCKED) return;
     paceCtrlK = mute.k;                       // the same rhythm as its neighbours
     drawPaceTrack();
     drawOneCtrl('night', t);
@@ -7077,10 +6999,51 @@
      gesture needs a creature under each finger, so there is no collision -
      hands on creatures pinch, hands on water make a string.
      ============================================================ */
+  /* WHAT YOUR HANDS ARE DOING, decided once and then left alone.
+     ------------------------------------------------------------
+     Two fingers make a bridge and three or more make an ensemble, and the
+     first version worked that out fresh every frame - so laying down a third
+     finger tore the bridge away mid-note and threw you into something else.
+     A mode that can change under you while you are holding still is not a
+     mode, it is a fault.
+
+     So it is settled at the start of the gesture and then locked until every
+     finger has left the glass. Hold two fingers for a moment and you have a
+     bridge, and a third finger joins that bridge rather than replacing it -
+     it plucks. Put three down at once and you have the ensemble. Either way,
+     what you are holding stays what you are holding. */
+  var TOUCH = { mode: 'none', dwell: 0 };
+  var PTR_LIST = [];
+  var BRIDGE_DWELL = 0.42;      // long enough to be a decision, short enough to find
+
+  function handMode(n, dt) {
+    if (n === 0) { TOUCH.mode = 'none'; TOUCH.dwell = 0; return TOUCH.mode; }
+    if (TOUCH.mode === 'none') {
+      if (n >= 3) TOUCH.mode = 'beat';
+      else if (n === 2) {
+        TOUCH.dwell += dt;
+        if (TOUCH.dwell >= BRIDGE_DWELL) TOUCH.mode = 'bridge';
+      } else TOUCH.dwell = 0;
+    }
+    return TOUCH.mode;
+  }
+
+  /* Each finger carries its own colour for as long as it is down, and the
+     colours are spread far apart round the wheel so that in a museum three
+     children can each see which of the lights is theirs. */
+  var HUE_SEQ = 0;
+  function fingerHue(p) {
+    if (p.mhue === undefined || p.mhue === null) {
+      HUE_SEQ = (HUE_SEQ + 97) % 360;
+      p.mhue = world.hue + 30 + HUE_SEQ;
+    }
+    return p.mhue;
+  }
+
   var STR = {
     on: false, a: null, b: null, k: 0,      // k is presence, it fades in and out
     amp: 0.06, phase: 0, deg: 5, f: 220, mode: 1,
-    v: null, pluckCool: 0, hue: 0
+    v: null, pluckCool: 0, hue: 0, pulses: []
   };
 
   function strFree() {
@@ -7112,6 +7075,14 @@
 
   function strPluck(x, y, hard, t) {
     STR.amp = Math.min(1, STR.amp + (hard ? 0.55 : 0.30));
+    // two pulses run out from where it was struck, in both directions
+    if (STR.a && STR.b && STR.pulses.length < 12) {
+      var ax = STR.b.x - STR.a.x, ay = STR.b.y - STR.a.y;
+      var uu = clamp(((x - STR.a.x) * ax + (y - STR.a.y) * ay) /
+                     Math.max(1, ax * ax + ay * ay), 0, 1);
+      STR.pulses.push({ u: uu, sp: 0.9 + STR.deg * 0.05, hue: STR.hue + 40, r: hard ? 9 : 6 });
+      STR.pulses.push({ u: uu, sp: -(0.9 + STR.deg * 0.05), hue: STR.hue + 40, r: hard ? 9 : 6 });
+    }
     burstRing(x, y, STR.hue + rnd(-20, 20), hard ? 9 : 5, hard ? 320 : 190, 0.55);
     addStir(x, y, (hard ? 0.10 : 0.055) * (Math.random() < 0.5 ? -1 : 1), 0.20);
     if (STR.pluckCool > 0 || !A.ok || !A.started) return;
@@ -7130,6 +7101,7 @@
     for (i = 0; i < list.length; i++) {
       var lp = list[i];
       if (!lp.down) continue;
+      fingerHue(lp);
       if (!d1) d1 = lp; else if (!d2) d2 = lp; else extra.push(lp);
     }
     /* Whether it may START and whether it may CONTINUE are different
@@ -7139,19 +7111,22 @@
        hold of something and the string would evaporate under them. Measured:
        it survived fifteen frames out of a hundred and eighty.
 
-       So the decision is made once, when the second finger lands. Nothing in
-       your hands yet means it is a string, and from then until you lift, those
-       two fingers belong to the string - they will not grab and they will not
-       wind up. A hand that is already carrying a creature is doing something
-       else, and gets the pinch it always got. */
-    var pair = !!(d1 && d2 && Math.hypot(d1.x - d2.x, d1.y - d2.y) > 78);
+       So the decision is made once, when the second finger lands, and it holds
+       until a hand leaves. What it does NOT do any more is take those fingers
+       away from everything else - they can still pick creatures up, and the
+       pinch still works underneath it. The first version claimed both hands
+       outright, which on a screen with three children on it is the wrong
+       instinct entirely. */
+    var pair = !!(TOUCH.mode === 'bridge' && d1 && d2 &&
+                  Math.hypot(d1.x - d2.x, d1.y - d2.y) > 78);
     var same = STR.on && STR.a === d1 && STR.b === d2;
     if (same) {
       if (!pair) strEnd();                 // brought together, or a hand left
     } else {
       if (STR.on) strEnd();                // the pair itself changed
-      if (pair && !d1.holding && !d2.holding) {
+      if (pair) {
         STR.a = d1; STR.b = d2; STR.on = true; STR.amp = 0.30; STR.phase = 0;
+      STR.pulses.length = 0;
         // a wind-up already under way on either hand yields to it
         if (d1.charging) { d1.chargeCancelled = true; releaseCharge(d1, t); d1.chargeCancelled = false; }
         if (d2.charging) { d2.chargeCancelled = true; releaseCharge(d2, t); d2.chargeCancelled = false; }
@@ -7220,6 +7195,22 @@
     STR.amp = Math.max(0.10, STR.amp * Math.pow(0.976, dt * 60));
     STR.phase += dt * (5 + STR.deg * 1.3);
 
+    /* Light travels ALONG it, which is most of what turns a wire into a
+       bridge. One leaves an end every so often, faster when the note is
+       higher, and a pluck sends a pair out from where you struck it. */
+    var pl = STR.pulses;
+    for (i = pl.length - 1; i >= 0; i--) {
+      pl[i].u += pl[i].sp * dt;
+      if (pl[i].u < -0.05 || pl[i].u > 1.05) pl.splice(i, 1);
+    }
+    STR.pulseNext = (STR.pulseNext || 0) - dt;
+    if (STR.pulseNext <= 0 && pl.length < 10) {
+      STR.pulseNext = rnd(0.28, 0.75);
+      var fromA = Math.random() < 0.5;
+      pl.push({ u: fromA ? 0 : 1, sp: (fromA ? 1 : -1) * (0.45 + STR.deg * 0.06),
+                hue: fingerHue(fromA ? a : b) + rnd(-16, 16), r: rnd(4, 7) });
+    }
+
     // and it drags the water with it, so carrying one carves a wide furrow
     var msp = (Math.hypot(a.vx, a.vy) + Math.hypot(b.vx, b.vy)) * 0.5;
     if (msp > 90) {
@@ -7285,6 +7276,40 @@
                         (ALPH[pass] * lit).toFixed(3) + ')';
       ctx.stroke();
     }
+    /* A second strand at the opposite phase. Two lines crossing and parting
+       along their length read as a woven thing with width; one line reads as a
+       wire however bright it is. */
+    ctx.beginPath();
+    for (i = 0; i <= N; i++) {
+      u2 = i / N;
+      off = Math.sin(Math.PI * u2 * STR.mode) * -swing * 0.62;
+      ctx.lineTo((a.x + ex * u2 + nx * off) * DPR, (a.y + ey * u2 + ny * off) * DPR);
+    }
+    ctx.lineWidth = 1.8 * DPR;
+    ctx.strokeStyle = 'hsla(' + norm360(STR.hue + 60).toFixed(0) + ',94%,72%,' +
+                      (0.42 * lit).toFixed(3) + ')';
+    ctx.stroke();
+
+    // and the light running along it
+    for (i = 0; i < STR.pulses.length; i++) {
+      var pz = STR.pulses[i];
+      var pu2 = clamp(pz.u, 0, 1);
+      var poff = Math.sin(Math.PI * pu2 * STR.mode) * swing;
+      var qx = (a.x + ex * pu2 + nx * poff) * DPR;
+      var qy = (a.y + ey * pu2 + ny * poff) * DPR;
+      var edge = Math.min(1, Math.min(pu2, 1 - pu2) * 6 + 0.25);
+      ctx.beginPath();
+      ctx.arc(qx, qy, pz.r * 2.6 * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + norm360(pz.hue).toFixed(0) + ',94%,60%,' +
+                      (0.16 * lit * edge).toFixed(3) + ')';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(qx, qy, pz.r * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + norm360(pz.hue).toFixed(0) + ',98%,82%,' +
+                      (0.85 * lit * edge).toFixed(3) + ')';
+      ctx.fill();
+    }
+
     // the two ends are where your hands are, so they get a knot of light
     for (i = 0; i < 2; i++) {
       var e2 = i ? b : a;
@@ -7295,6 +7320,276 @@
       ctx.beginPath();
       ctx.arc(e2.x * DPR, e2.y * DPR, (5 + STR.amp * 5) * DPR, 0, TAU);
       ctx.fillStyle = 'hsla(' + hue + ',96%,78%,' + (0.60 * lit).toFixed(3) + ')';
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  /* ============================================================
+     THE ENSEMBLE
+     ------------------------------------------------------------
+     Three fingers or more and the screen starts playing a beat out of the
+     places you are touching. Every finger is a note - the same note that spot
+     has always been - and a rhythm wanders round them: sometimes quick,
+     sometimes slow, sometimes striking one twice before it moves on, sometimes
+     leaving a gap. It never repeats and it never stops while you are there.
+
+     It is built for three children at a museum table. Each finger keeps its
+     own colour, so you can see which light is yours, and you get two things to
+     wait for rather than one: your note coming round again, and the LEAP - a
+     ribbon of light that jumps out of one finger, arcs over the field and
+     lands on another, sounding it when it arrives. Which one goes and where it
+     lands is never the same twice, so the interesting part is not performing
+     anything, it is watching to see who is next.
+
+     Nobody is playing better than anybody else. Every note is in the same
+     pentatonic, the beat is the app's, and holding still is a perfectly good
+     way to take part - your note keeps coming round whether you move or not.
+     ============================================================ */
+  var ENS = {
+    on: false, k: 0, step: 0.24, next: 0, density: 0.55,
+    rep: 0, last: null, noteCool: 0, arcs: [], hits: []
+  };
+  var ARC_MAX = 5;
+
+  function ensNote(p, t, vel) {
+    var hue = fingerHue(p);
+    p.hitAt = t; p.hitK = 1;
+    /* NOT into the trail buffer. This is the third time that buffer has caught
+       something out and it is always the same shape of mistake: it is never
+       cleared, only veiled, so anything drawn repeatedly at a spot that does
+       not move burns a hole there. A finger resting on the glass is the most
+       stationary thing in the app, and a bloom painted at it on every hit
+       turned each child's note into a white scar within seconds - the planet
+       halo and the ember ring, again.
+
+       So the bloom is drawn on the screen canvas, fresh every frame, out of
+       ENS.hits below.
+
+       The sparks may go into the trail because they travel - but only just.
+       Measured over fifteen seconds of four fingers held still, nine slow
+       sparks a hit took the trail buffer from 24 to 51, because "it moves" is
+       not enough when thirty of them a second all set out from the same four
+       places. Fewer, faster and shorter-lived, so each one is out of the
+       neighbourhood before the next arrives. */
+    burstRing(p.x, p.y, hue, 4, 520, 0.45);
+    // one stir slot per finger, not one per note, so holding still for a
+    // minute does not pour a minute of energy into the water at one spot
+    addStir(p.x, p.y, 0.035 * (Math.random() < 0.5 ? -1 : 1), 0.20, 'ens' + p.id);
+    ENS.hits.push({ x: p.x, y: p.y, hue: hue, t: 0, life: 0.85 });
+    if (ENS.hits.length > 14) ENS.hits.shift();
+    if (ENS.noteCool > 0 || !A.ok || !A.started) return;
+    ENS.noteCool = 0.10;
+    var f = noteI(noteIdxAt(p.x)) * octAt(p.y);
+    var pan = panOf(p.x);
+    mine(function () { chime(f, 0.030 * vel, pan, 0.9, 2.2); });
+  }
+
+  function ensLeap(from, to, t) {
+    if (ENS.arcs.length >= ARC_MAX) return;
+    var d = Math.hypot(to.x - from.x, to.y - from.y);
+    ENS.arcs.push({
+      from: from, to: to,
+      x0: from.x, y0: from.y, x1: to.x, y1: to.y,
+      lift: Math.min(H * 0.42, 60 + d * 0.42),
+      t: 0, dur: clamp(0.42 + d / 1100, 0.42, 1.05),
+      hue: fingerHue(from), hue2: fingerHue(to)
+    });
+  }
+
+  function arcAt(A2, u) {
+    // ends follow the fingers, so a leap lands on your hand wherever it went
+    var x0 = A2.from && A2.from.down ? A2.from.x : A2.x0;
+    var y0 = A2.from && A2.from.down ? A2.from.y : A2.y0;
+    var x1 = A2.to && A2.to.down ? A2.to.x : A2.x1;
+    var y1 = A2.to && A2.to.down ? A2.to.y : A2.y1;
+    return { x: x0 + (x1 - x0) * u,
+             y: y0 + (y1 - y0) * u - Math.sin(Math.PI * u) * A2.lift };
+  }
+
+  function updateEnsemble(downs, dt, t) {
+    var live = TOUCH.mode === 'beat' && downs.length >= 2;
+    ENS.on = live;
+    ENS.k = live ? Math.min(1, ENS.k + dt * 3) : Math.max(0, ENS.k - dt * 2);
+    ENS.noteCool -= dt;
+    var i;
+
+    // the leaps carry on even as the hand that threw them moves
+    for (i = ENS.arcs.length - 1; i >= 0; i--) {
+      var A2 = ENS.arcs[i];
+      A2.t += dt;
+      if (A2.t >= A2.dur) {
+        if (live && A2.to && A2.to.down) ensNote(A2.to, t, 1.0);
+        ENS.arcs.splice(i, 1);
+      }
+    }
+    for (i = ENS.hits.length - 1; i >= 0; i--) {
+      ENS.hits[i].t += dt;
+      if (ENS.hits[i].t > ENS.hits[i].life) ENS.hits.splice(i, 1);
+    }
+    for (i = 0; i < downs.length; i++) {
+      if (downs[i].hitK) downs[i].hitK = Math.max(0, downs[i].hitK - dt * 1.7);
+    }
+    if (!live) return;
+
+    /* The beat drifts rather than being set. Both the grid and how full it is
+       wander slowly, so it speeds up and thins out on its own and never
+       settles into a loop you could clap along to. */
+    ENS.step = clamp(ENS.step + rnd(-0.9, 0.9) * dt, 0.15, 0.42);
+    ENS.density = clamp(ENS.density + rnd(-0.5, 0.5) * dt, 0.30, 0.85);
+
+    ENS.next -= dt;
+    if (ENS.next > 0) return;
+    /* More hands, faster grid. Left alone, five fingers shared out the same
+       number of notes as three did and each child waited nearly twice as long
+       between their own - measured at three to six hits each in eight seconds.
+       The point of the beat is that your note keeps coming round. */
+    ENS.next = ENS.step / clamp(1 + (downs.length - 3) * 0.22, 1, 1.9);
+    if (Math.random() > ENS.density) return;          // a rest, and rests matter
+
+    var pick2 = null;
+    if (ENS.rep > 0 && ENS.last && ENS.last.down) {
+      ENS.rep--; pick2 = ENS.last;                     // striking the same one again
+    } else {
+      /* Whoever has waited longest, mostly. Pure random leaves a finger
+         untouched for ages, and in a room where each finger belongs to a
+         different child that is the one thing this must not do. */
+      var best = null, bestAge = -1;
+      for (i = 0; i < downs.length; i++) {
+        var q = downs[i];
+        var age = t - (q.hitAt || 0) + Math.random() * 1.2;
+        if (age > bestAge) { bestAge = age; best = q; }
+      }
+      pick2 = best;
+      if (Math.random() < 0.22) ENS.rep = 1 + ((Math.random() * 2) | 0);
+    }
+    if (!pick2) return;
+    ENS.last = pick2;
+    ensNote(pick2, t, 0.75 + Math.random() * 0.45);
+
+    // and sometimes it throws to somebody else
+    if (downs.length > 1 && Math.random() < 0.42) {
+      var others = [];
+      for (i = 0; i < downs.length; i++) if (downs[i] !== pick2) others.push(downs[i]);
+      if (others.length) ensLeap(pick2, pick(others), t);
+    }
+  }
+
+  function drawEnsemble(awake) {
+    if (ENS.k <= 0.004) return;
+    var lit = (0.45 + awake * 0.55) * ENS.k;
+    var i, j;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+    // the leaps: a bowed ribbon with a bright head, drawn fresh every frame
+    for (i = 0; i < ENS.arcs.length; i++) {
+      var A2 = ENS.arcs[i];
+      var u = clamp(A2.t / A2.dur, 0, 1);
+      var hue = norm360(A2.hue + (A2.hue2 - A2.hue) * u * 0.5).toFixed(0);
+      var tail = Math.max(0, u - 0.46);
+      for (var pass = 0; pass < 2; pass++) {
+        ctx.beginPath();
+        for (j = 0; j <= 16; j++) {
+          var uu = tail + (u - tail) * (j / 16);
+          var pt = arcAt(A2, uu);
+          if (j) ctx.lineTo(pt.x * DPR, pt.y * DPR); else ctx.moveTo(pt.x * DPR, pt.y * DPR);
+        }
+        ctx.lineWidth = (pass ? 3.4 : 17) * DPR;
+        ctx.strokeStyle = 'hsla(' + hue + ',95%,' + (pass ? '76%,' : '56%,') +
+                          ((pass ? 0.90 : 0.20) * lit).toFixed(3) + ')';
+        ctx.stroke();
+      }
+      var hd = arcAt(A2, u);
+      ctx.beginPath(); ctx.arc(hd.x * DPR, hd.y * DPR, 26 * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + hue + ',95%,56%,' + (0.16 * lit).toFixed(3) + ')';
+      ctx.fill();
+      ctx.beginPath(); ctx.arc(hd.x * DPR, hd.y * DPR, 8.5 * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + hue + ',98%,84%,' + (0.9 * lit).toFixed(3) + ')';
+      ctx.fill();
+      blob(tctx, hd.x, hd.y, 4.5, A2.hue + 30, 0.11 * lit);
+    }
+
+    // where a note landed: a ring opening out, in that finger's colour
+    for (i = 0; i < ENS.hits.length; i++) {
+      var hh = ENS.hits[i];
+      var hk = hh.t / hh.life, fade = (1 - hk) * (1 - hk);
+      // the body the trail buffer used to give it, drawn and thrown away again
+      ctx.beginPath();
+      ctx.arc(hh.x * DPR, hh.y * DPR, (10 + hk * 40) * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + norm360(hh.hue + 40).toFixed(0) + ',96%,60%,' +
+                      (0.22 * fade * lit).toFixed(3) + ')';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(hh.x * DPR, hh.y * DPR, (14 + hk * 88) * DPR, 0, TAU);
+      ctx.lineWidth = (1 + fade * 7) * DPR;
+      ctx.strokeStyle = 'hsla(' + norm360(hh.hue + 30).toFixed(0) + ',98%,64%,' +
+                        (0.75 * fade * lit).toFixed(3) + ')';
+      ctx.stroke();
+      // a second ring chasing the first, so a hit reads as a burst not a line
+      ctx.beginPath();
+      ctx.arc(hh.x * DPR, hh.y * DPR, (8 + hk * 52) * DPR, 0, TAU);
+      ctx.lineWidth = (1 + fade * 3) * DPR;
+      ctx.strokeStyle = 'hsla(' + norm360(hh.hue + 70).toFixed(0) + ',98%,74%,' +
+                        (0.45 * fade * lit).toFixed(3) + ')';
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /* Every finger that is down wears its own colour, in both modes, so a child
+     can point at the screen and say which light is theirs. */
+  function drawFingers(list, awake) {
+    var lit = 0.45 + awake * 0.55;
+    var down = [], i;
+    for (i = 0; i < list.length; i++) {
+      if (list[i].down && list[i].mhue !== undefined && list[i].mhue !== null) down.push(list[i]);
+    }
+    if (!down.length) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+    /* A faint web joining everybody who is touching, drawn only once three
+       hands are on it. Between leaps there would otherwise be nothing at all
+       between the fingers, and the thing three children round a table need to
+       see first is that they are in the same picture. */
+    if (down.length >= 3 && ENS.k > 0.02) {
+      ctx.beginPath();
+      for (i = 0; i < down.length; i++) {
+        if (i) ctx.lineTo(down[i].x * DPR, down[i].y * DPR);
+        else ctx.moveTo(down[i].x * DPR, down[i].y * DPR);
+      }
+      ctx.closePath();
+      ctx.lineWidth = 1.4 * DPR;
+      ctx.strokeStyle = 'hsla(' + norm360(world.hue + 60).toFixed(0) + ',80%,62%,' +
+                        (0.12 * lit * ENS.k).toFixed(3) + ')';
+      ctx.stroke();
+    }
+
+    /* And each finger keeps its own colour. Bright enough to find from across
+       a room and saturated enough to stay that colour when it is struck - the
+       first version washed out to white on a hit, which is precisely when a
+       child is looking to see whether it was theirs. */
+    for (i = 0; i < down.length; i++) {
+      var p = down[i];
+      var hk = p.hitK || 0;
+      var hue = norm360(p.mhue).toFixed(0);
+      ctx.beginPath();
+      ctx.arc(p.x * DPR, p.y * DPR, (26 + hk * 30) * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + hue + ',95%,55%,' + ((0.07 + hk * 0.14) * lit).toFixed(3) + ')';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(p.x * DPR, p.y * DPR, (16 + hk * 22) * DPR, 0, TAU);
+      ctx.lineWidth = (2.2 + hk * 4) * DPR;
+      ctx.strokeStyle = 'hsla(' + hue + ',97%,' + (60 + hk * 10).toFixed(0) + '%,' +
+                        ((0.55 + hk * 0.42) * lit).toFixed(3) + ')';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(p.x * DPR, p.y * DPR, (5 + hk * 9) * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + hue + ',98%,' + (72 + hk * 12).toFixed(0) + '%,' +
+                        ((0.55 + hk * 0.4) * lit).toFixed(3) + ')';
       ctx.fill();
     }
     ctx.restore();
@@ -7380,14 +7675,39 @@
     var span = taps[taps.length - 1].t - taps[0].t;
     if (span < 0.5) { taps.length = 0; return; }         // a double tap is not a rhythm
 
-    ECHO.cool = 26;
-    if (Math.random() < 0.45) { taps.length = 0; return; }   // not every time
+    ECHO.cool = 11;
+    if (Math.random() < 0.2) { taps.length = 0; return; }    // not quite every time
 
     /* Slightly quicker than you played it, which is what makes it read as an
-       answer rather than as a recording. */
+       answer rather than as a recording.
+
+       And about half the time it is played somewhere else on the screen. The
+       shape of the phrase is kept exactly - the same intervals, the same
+       distances, the same turns - but the whole figure is carried to another
+       part of the field. Because position IS pitch here, moving it sideways
+       transposes it and moving it up or down changes its register, so the
+       answer comes back recognisably the same tune in a different key. That is
+       what a musician would do with a phrase you handed them, and it costs two
+       lines. */
+    var offX = 0, offY = 0;
+    if (Math.random() < 0.5) {
+      var lo = { x: taps[0].x, y: taps[0].y }, hi = { x: taps[0].x, y: taps[0].y };
+      for (var b2 = 1; b2 < taps.length; b2++) {
+        if (taps[b2].x < lo.x) lo.x = taps[b2].x;
+        if (taps[b2].y < lo.y) lo.y = taps[b2].y;
+        if (taps[b2].x > hi.x) hi.x = taps[b2].x;
+        if (taps[b2].y > hi.y) hi.y = taps[b2].y;
+      }
+      var m = 40;
+      offX = rnd(m - lo.x, W - m - hi.x);
+      offY = rnd(m - lo.y, H - m - hi.y);
+      // worth moving, or not worth pretending to
+      if (Math.hypot(offX, offY) < 90) { offX = 0; offY = 0; }
+    }
     var seq = [];
     for (var i = 0; i < taps.length; i++) {
-      seq.push({ x: taps[i].x, y: taps[i].y,
+      seq.push({ x: clamp(taps[i].x + offX, 24, W - 24),
+                 y: clamp(taps[i].y + offY, 24, H - 24),
                  gap: i ? clamp((taps[i].t - taps[i - 1].t) * 0.86, 0.10, 1.5) : 0 });
     }
     ECHO.taps = seq; ECHO.on = true; ECHO.i = 0; ECHO.next = 0; ECHO.k = 0;
@@ -10371,13 +10691,18 @@
             p.chargeCancelled = false;
           }
           p.mayCharge = false;
-          if (!strOwns(p)) beginGrab(p, gc, t);
+          beginGrab(p, gc, t);
         }
       }
       /* And only now, with that settled, does a wind-up begin. Its clock is
          backdated to the moment of contact so a hold reaches full in the same
          time it always did. */
-      if (p.mayCharge && p.down && !p.holding && !p.charging && !strOwns(p) &&
+      /* One finger winds up a wave. Two or more are making music instead, and
+         a handful of wind-ups under a running beat is just noise. This is the
+         only thing the multitouch modes take away, and they take it from the
+         second finger onward rather than from the first: a single press and
+         hold builds and releases exactly as it always did. */
+      if (p.mayCharge && p.down && !p.holding && !p.charging && nDown < 2 &&
           (t - p.downAt) > 0.30) {
         p.mayCharge = false;
         /* It landed on open water and it stayed put, so it winds up - full
@@ -10444,7 +10769,12 @@
         };
       })(voices, base, oc, pan3, leadSp));
     }
+    PTR_LIST = list;
+    var DOWNS = [];
+    for (var dz = 0; dz < list.length; dz++) if (list[dz].down) DOWNS.push(list[dz]);
+    handMode(DOWNS.length, dt);
     updateString(list, dt, t);
+    updateEnsemble(DOWNS, dt, t);
     updateEcho(dt, t, swN);
     updatePinch(list, t);
     updateErosion(list, dt, t);
@@ -10452,7 +10782,6 @@
     updateRockets(dt, t);
     updateWEV(dt);
     updateMFX(dt);
-    updateSoap(dt);
 
     /* A dragging hand used to throw off ripples as it went. It no
        longer does: a swipe is a different act from a press, and it has
@@ -11165,7 +11494,6 @@
 
     drawWEV(t);
     drawMFX(t);
-    drawSoap(t);
     drawRockets(t, awake);
     drawSeqs(t, awake);
     drawWants(t, awake);
@@ -11321,6 +11649,8 @@
     drawBubbles(t);
     drawEmbers();
     drawString(awake);
+    drawEnsemble(awake);
+    drawFingers(PTR_LIST, awake);
     drawEcho(awake);
     drawWear(t);
     /* NIGHT: a veil over the finished frame, then the controls on top of it.
