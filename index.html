@@ -2980,7 +2980,7 @@
   }
 
   function creatureAt(x, y, pad, strict) {
-    var best = null, bestS = 1e9;
+    var best = null, bestS = 1e9, onPlanet = null;
     pad = pad || 0;
     for (var i = 0; i < creatures.length; i++) {
       var c = creatures[i];
@@ -3003,10 +3003,33 @@
       var pa = dx * ux + dy * uy, pb = dy * ux - dx * uy;
       // whichever is nearest as a fraction of its OWN reach, so a small
       // creature you are dead on beats a long one you have merely grazed
+      if (c.world && !onPlanet) {
+        var pr = worldR(c) + 10 + pad;
+        if (dx * dx + dy * dy <= pr * pr) onPlanet = c;
+      }
       var score = (pa * pa) / (along * along) + (pb * pb) / (across * across);
       if (score >= 1) continue;
       if (score < bestS) { bestS = score; best = c; }
     }
+    /* A PLANET wins any press that lands on it, and it wins outright.
+       ------------------------------------------------------------
+       The score above is a fraction of each creature's OWN reach, deliberately,
+       so that a small thing you are dead on beats a long thin thing you have
+       merely grazed. That is right for creatures and wrong for a planet,
+       because a planet is large and is surrounded by moons: press its middle
+       and a moon drifting across the disc scores far lower and takes the tap.
+
+       Measured before this: pressing a planet dead centre reached the planet
+       only six times in eight, and twenty pixels off centre - still well
+       inside a twenty-eight pixel disc - only four times in eight. Every miss
+       fell through to the ordinary press-on-nothing, which spreads a ripple
+       exactly where the planet is, so the rocky planet appeared to still be
+       doing the ripple it had not done for some time.
+
+       A planet is the one thing here that is aimed at on purpose, and it always
+       does the same thing when tapped, so being able to hit it is the whole
+       deal. Inside its disc, it is what you meant. */
+    if (onPlanet) return onPlanet;
     return best;
   }
 
