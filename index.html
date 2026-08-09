@@ -8151,8 +8151,19 @@
      stone, because it is losing the energy to lift itself out again. It ends
      in a flurry of rings almost on top of each other, and the light goes out
      there. */
-  var STONE_GAP_DECAY = 0.70;     // each hop is this fraction of the last
+  var STONE_GAP_DECAY = 0.76;     // each hop is this fraction of the last
   var STONE_SPEED_DECAY = 0.86;   // and it is travelling this much slower
+
+  /* Every stone gets its own colour, and they are spread right round the wheel
+     rather than clustered on the room's current hue. Half a dozen skipping at
+     once should look like a handful of different stones, which is also the
+     only way you can tell which ring belongs to which. */
+  var STONE_HUES = [0, 34, 62, 96, 132, 168, 196, 224, 262, 296, 322, 344];
+
+  /* And now and then a ring comes out strange. Rare enough to be worth
+     noticing, ordinary enough that nothing about it needs explaining. */
+  var SPLASH_KINDS = ['plain', 'plain', 'plain', 'plain', 'plain', 'plain',
+                      'plain', 'octa', 'double', 'wide'];
 
   function skipStones(big, t) {
     var R = worldR(big);
@@ -8164,19 +8175,21 @@
       /* Off the surface before anything happens, and the first touch is a long
          way further still. A stone thrown flat skips its longest first. */
       /* Sized to the screen, not to a constant. The whole run is the first
-         gap over one minus the decay, about three and a third times it, and it
-         has to finish where you can still see it - a stone that leaves the
-         edge never gets to slow down and settle, which is the part worth
-         watching. */
-      var gap = clamp(rnd(0.13, 0.20) * Math.min(W, H), 85, 190);
-      var speed = gap / rnd(0.45, 0.60);
+         gap over one minus the decay, and it has to finish where you can still
+         see it - a stone that leaves the edge never gets to slow down and
+         settle, which is the part worth watching. The first touch comes in
+         closer than it did, and the gentler decay makes up the distance with
+         more hops rather than with one long one, which is more of the thing
+         you are actually watching for. */
+      var gap = clamp(rnd(0.08, 0.13) * Math.min(W, H), 58, 130);
+      var speed = gap / rnd(0.34, 0.46);
       STONES.push({
         x: big.x + dx * (R + 14), y: big.y + dy * (R + 14),
         dx: dx, dy: dy,
         togo: gap,                    // distance still to run before it touches
         gap: gap, speed: speed,
         hops: 9 + ((Math.random() * 4) | 0),   // enough to reach the flurry
-        hue: world.hue + big.hueOff + rnd(10, 60),
+        hue: world.hue + pick(STONE_HUES) + rnd(-14, 14),
         deg: 2 + ((Math.random() * 5) | 0),
         fade: 1, sound: voice++ < 2
       });
@@ -8202,9 +8215,11 @@
         continue;
       }
       // it touches down
-      var k = clamp(st.gap / 185, 0.15, 1);
-      SPLASH.push({ x: st.x, y: st.y, hue: st.hue, k: k, t: 0,
-                    life: 0.55 + k * 0.45 });
+      var k = clamp(st.gap / 130, 0.15, 1);
+      var kind = pick(SPLASH_KINDS);
+      SPLASH.push({ x: st.x, y: st.y, hue: st.hue + rnd(-22, 22), k: k, t: 0,
+                    kind: kind, rot: Math.random() * TAU,
+                    life: (0.55 + k * 0.45) * (kind === 'wide' ? 1.7 : 1) });
       if (SPLASH.length > 40) SPLASH.shift();
       addStir(st.x, st.y, 0.03 * k * (Math.random() < 0.5 ? -1 : 1), 0.14);
       if (st.sound && A.ok && A.started) {
@@ -8215,7 +8230,8 @@
       st.hops--;
       if (st.hops <= 0) {
         // the last one, and it sinks
-        SPLASH.push({ x: st.x, y: st.y, hue: st.hue + 40, k: 1, t: 0, life: 1.1 });
+        SPLASH.push({ x: st.x, y: st.y, hue: st.hue + 40, k: 1, t: 0,
+                      kind: 'plain', rot: 0, life: 1.1 });
         continue;
       }
       /* Both shrink, which is the whole of it. Distance falls by a third and
@@ -8316,12 +8332,26 @@
            a bright thing across the water. */
         var sf = 1 - sk;
         var sh = norm360(sp3.hue).toFixed(0);
-        var big2 = 0.45 + sp3.k * 0.55;
-        ctx.beginPath();
-        ctx.arc(sp3.x * DPR, sp3.y * DPR, (7 + sk * 50 * big2) * DPR, 0, TAU);
+        var big2 = (0.45 + sp3.k * 0.55) * (sp3.kind === 'wide' ? 1.9 : 1);
+        var rad = (7 + sk * 50 * big2) * DPR;
         ctx.lineWidth = (1.6 + sf * 7) * DPR;
         ctx.strokeStyle = 'hsla(' + sh + ',98%,72%,' + (1.0 * sf * lit).toFixed(3) + ')';
+        ctx.beginPath();
+        /* A faceted one now and then, using the same octagon the embers wear,
+           which is the only hard-edged shape in the whole app and reads as
+           deliberate rather than as a glitch. */
+        if (sp3.kind === 'octa') octa(ctx, sp3.x * DPR, sp3.y * DPR, rad, sp3.rot + sk * 0.6);
+        else ctx.arc(sp3.x * DPR, sp3.y * DPR, rad, 0, TAU);
         ctx.stroke();
+        // and sometimes a second one following it out
+        if (sp3.kind === 'double' && sk > 0.18) {
+          ctx.beginPath();
+          ctx.arc(sp3.x * DPR, sp3.y * DPR, rad * 0.55, 0, TAU);
+          ctx.lineWidth = (1 + sf * 3.5) * DPR;
+          ctx.strokeStyle = 'hsla(' + norm360(sp3.hue + 48).toFixed(0) +
+                            ',98%,76%,' + (0.7 * sf * lit).toFixed(3) + ')';
+          ctx.stroke();
+        }
         ctx.beginPath();
         ctx.arc(sp3.x * DPR, sp3.y * DPR, (5 + sk * 26 * big2) * DPR, 0, TAU);
         ctx.fillStyle = 'hsla(' + sh + ',96%,62%,' + (0.30 * sf * lit).toFixed(3) + ')';
