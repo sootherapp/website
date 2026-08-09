@@ -97,6 +97,10 @@ else on the screen, which transposes it.
 
 - It answers **every** phrase, up to 32 taps long.
 - It will not speak until you have genuinely stopped.
+- Most replies end with a small cadence of their own: a run up the scale, a
+  fall that lands on the root, or the root breathed twice an octave apart.
+  Each note is placed where that pitch lives, so a rising ending is also a
+  light climbing the screen.
 - Touch anything and it stops mid-note. The turn is yours again.
 - A phrase can only **begin** in open space. Drumming on a creature is a
   conversation with that creature, and does not seed one.

@@ -2642,7 +2642,12 @@
         switchDrop(dh, t);
         return;
       }
-      if (p.cand && p.cand.vit >= 0.3) {
+      /* A planet keeps its own, lower threshold here too. creatureAt will now
+       hand back a planet you can still see, and this used to throw it away
+       again a line later, which is the second half of the same fault: a
+       fading planet was found and then dropped. Anything that can be
+       resolved as the target of a press deserves to be poked. */
+    if (p.cand && (p.cand.vit >= 0.3 || (p.cand.world && p.cand.vit > 0.06))) {
         if (dwellLast === p.cand && t - dwellLastT < 3.5) {
           dwellHeld = p.cand; dwellLast = null;
           startHeldVoice(p.cand);
@@ -2984,6 +2989,27 @@
     pad = pad || 0;
     for (var i = 0; i < creatures.length; i++) {
       var c = creatures[i];
+      /* A PLANET is tappable for as long as it can be SEEN, which is not the
+         same as the threshold everything else uses.
+         ------------------------------------------------------------
+         Below vit 0.35 a creature stops being findable, which is right: a
+         thing that is nearly gone should not be catching presses meant for
+         what is behind it. A planet is the opposite case. It is large, it is
+         obviously still there, it is the one thing in the app that is aimed at
+         on purpose, and it goes on being drawn well past that line.
+
+         Measured before this: every planet type, tapped in its last stretch of
+         life, did nothing at all - the press missed it entirely and fell
+         through to press-on-nothing, which spreads a ripple exactly where the
+         planet is. So a dying planet appeared both to have stopped working AND
+         to have gone back to rippling. Two complaints, one line. */
+      if (c.world) {
+        if (c.vit > 0.06 && !onPlanet) {
+          var pdx = x - c.x, pdy = y - c.y;
+          var prr = worldR(c) + 10 + pad;
+          if (pdx * pdx + pdy * pdy <= prr * prr) onPlanet = c;
+        }
+      }
       if (c.vit < 0.35) continue;
       /* Sized from what is on the screen right now: the layer's scale, and the
          same mood swell drawCreature applies, so a creature that has puffed up
@@ -3003,10 +3029,6 @@
       var pa = dx * ux + dy * uy, pb = dy * ux - dx * uy;
       // whichever is nearest as a fraction of its OWN reach, so a small
       // creature you are dead on beats a long one you have merely grazed
-      if (c.world && !onPlanet) {
-        var pr = worldR(c) + 10 + pad;
-        if (dx * dx + dy * dy <= pr * pr) onPlanet = c;
-      }
       var score = (pa * pa) / (along * along) + (pb * pb) / (across * across);
       if (score >= 1) continue;
       if (score < bestS) { bestS = score; best = c; }
@@ -6080,7 +6102,22 @@
 
          Between three and seven minutes at rest, averaging about five; a
          child actually playing still gets one every thirty to sixty seconds. */
-      var quiet = clamp(world.idle / 45, 0, 1);
+      /* WATCHING IS NOT LEAVING.
+         ------------------------------------------------------------
+         world.idle counts from the last frame with a finger actually ON the
+         glass, and it was fed straight into the multiplier, so pausing for
+         twenty seconds to watch what you had just made already tripled the
+         gap: measured at the default dial, thirty to sixty-four seconds became
+         ninety-nine to two hundred and twelve. Almost nobody holds a finger
+         down continuously, so almost nobody ever got the rate this was written
+         to give them, and the phrases quietly thinned out for everyone who
+         was actually enjoying it.
+
+         There is now a grace period. Touch anything in the last twenty seconds
+         and you count as here; the long gaps only arrive after a minute and a
+         half of nothing at all, which is the empty room this was guarding
+         against in the first place. */
+      var quiet = clamp((world.idle - 20) / 60, 0, 1);
       seqNext = t + (30 + Math.random() * 34) * (1 + quiet * 5.2) * paceGap();
       var live = 0;
       for (i = 0; i < SEQS.length; i++) if (!SEQS[i].done) live++;
@@ -7872,9 +7909,10 @@
      anything is touched, so a long answer can never trap anyone. */
   var ECHO_MAX = 32;
 
-  function echoNote(x, y) {
+  function echoNote(x, y, vel) {
     if (!A.ok || !A.started) return;
-    asNote(function () { playTouchNote(x, y, 0.32); });
+    var v = vel === undefined ? 0.32 : vel;
+    asNote(function () { playTouchNote(x, y, v); });
   }
 
   function echoStop() { ECHO.on = false; ECHO.k = 0; }
@@ -7906,7 +7944,7 @@
       ECHO.y += (tgt.y - ECHO.y) * ease;
       if (ECHO.next <= 0) {
         ECHO.x = tgt.x; ECHO.y = tgt.y;
-        echoNote(tgt.x, tgt.y);
+        echoNote(tgt.x, tgt.y, tgt.tail ? 0.24 : 0.32);
         /* On the screen canvas, not the trail. A child taps the same corner
            over and over, and now that every phrase is answered the reply
            returns to those same fixed points every few seconds - which is the
@@ -7977,6 +8015,49 @@
                  y: clamp(taps[i].y + offY, 24, H - 24),
                  gap: i ? clamp((taps[i].t - taps[i - 1].t) * 0.86, 0.10, 1.5) : 0 });
     }
+    /* AND THEN IT FINISHES THE THOUGHT.
+       ------------------------------------------------------------
+       Your phrase played back is a repetition. A repetition with a cadence on
+       the end is an answer, and that is a different thing to be handed: it
+       says the room heard where you stopped and had an idea about it.
+
+       Three endings, chosen fresh each time. A RISE runs up the scale from
+       wherever you left off and opens out. A FALL comes down and lands on the
+       root. A SETTLE just breathes the root twice, an octave apart, and stops.
+       None of them can be wrong, because all of them are degrees of the same
+       pentatonic, and each note is PLACED at the position that means that
+       pitch - so a rising ending is also a light climbing the screen. */
+    if (Math.random() < 0.72 && seq.length) {
+      var last = seq[seq.length - 1];
+      var lastDeg = noteIdxAt(last.x), lastOct = octAt(last.y);
+      var kind = pick(['rise', 'fall', 'settle']);
+      var steps = [], n2, d2;
+      if (kind === 'rise') {
+        n2 = 3 + ((Math.random() * 2) | 0);
+        d2 = lastDeg;
+        for (i = 0; i < n2; i++) {
+          d2 = Math.min(NOTES.length - 1, d2 + 1 + ((Math.random() * 2) | 0));
+          steps.push({ deg: d2, oct: i === n2 - 1 ? Math.min(2, lastOct * 2) : lastOct });
+        }
+      } else if (kind === 'fall') {
+        n2 = 3 + ((Math.random() * 2) | 0);
+        d2 = lastDeg;
+        for (i = 0; i < n2; i++) {
+          d2 = Math.max(0, d2 - 1 - ((Math.random() * 2) | 0));
+          steps.push({ deg: i === n2 - 1 ? 0 : d2, oct: lastOct });
+        }
+      } else {
+        steps.push({ deg: 0, oct: lastOct });
+        steps.push({ deg: 0, oct: Math.min(2, lastOct * 2) });
+      }
+      for (i = 0; i < steps.length; i++) {
+        seq.push({ x: xForDeg(steps[i].deg), y: yForOct(steps[i].oct),
+                   gap: i === 0 ? clamp(seq[seq.length - 1].gap * 1.15, 0.16, 0.9)
+                                : (kind === 'settle' ? 0.42 : clamp(0.10 + Math.random() * 0.09, 0.10, 0.2)),
+                   tail: true });
+      }
+    }
+
     ECHO.play = seq; ECHO.taps = [];
     ECHO.on = true; ECHO.i = 0; ECHO.next = 0; ECHO.k = 0;
     ECHO.x = seq[0].x; ECHO.y = seq[0].y;
@@ -9698,6 +9779,18 @@
     var up = 1 - clamp(y / Math.max(1, H), 0, 1);
     return up > 0.66 ? 2 : (up < 0.33 ? 0.5 : 1);
   }
+  /* Position is pitch, and it runs both ways.
+     ------------------------------------------------------------
+     noteIdxAt and octAt turn a place into a note. These turn a note back into
+     a place, which is what lets the echo's ending be SEEN as well as heard: a
+     rising run is light climbing the screen, because up is up. */
+  function xForDeg(d) {
+    return clamp((d / Math.max(1, NOTES.length - 1)) * W, 26, W - 26);
+  }
+  function yForOct(o) {
+    return o >= 2 ? H * 0.18 : (o <= 0.5 ? H * 0.82 : H * 0.5);
+  }
+
   function playTouchNote(x, y, vel) {
     if (!A.ok || !A.started) return;
     var up = 1 - clamp(y / Math.max(1, H), 0, 1);
