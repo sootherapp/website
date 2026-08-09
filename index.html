@@ -7614,10 +7614,26 @@
      out of noteIdxAt and octAt exactly as yours did. It is your phrase, an
      octave higher, in the bell that was built to always be audible.
      ============================================================ */
+  /* taps is what you played; play is what is being played back at you. These
+     used to be one array, which was survivable only because a long cooldown
+     kept them from ever being needed at the same time: after a reply, taps
+     still held the finished sequence, whose entries carry a gap but no time,
+     and the next taps were appended on top of that mixture. Left alone it
+     computes a NaN gap and the reply stops dead on a note forever. Answering
+     every phrase means the two lists are now in use within a second of each
+     other, so they are two lists. */
   var ECHO = {
-    taps: [], on: false, i: 0, next: 0, cool: 0, x: 0, y: 0, k: 0
+    taps: [], play: [], blooms: [],
+    on: false, i: 0, next: 0, cool: 0, x: 0, y: 0, k: 0
   };
-  var ECHO_MAX = 6;
+  /* However long the phrase was. Six was a guess, and it was the wrong end of
+     the phrase to keep - shift() drops the OLDEST, so a child who tapped out
+     a long figure got the last few taps of it handed back and none of the
+     shape they had actually made. This is high enough not to be reached by
+     anything anybody would sit and play in one breath, and it is still a
+     ceiling, because the array wants one. The reply is cancelled the instant
+     anything is touched, so a long answer can never trap anyone. */
+  var ECHO_MAX = 32;
 
   function echoNote(x, y) {
     if (!A.ok || !A.started) return;
@@ -7628,6 +7644,10 @@
 
   function updateEcho(dt, t, fingers) {
     ECHO.cool -= dt;
+    for (var bi = ECHO.blooms.length - 1; bi >= 0; bi--) {
+      ECHO.blooms[bi].t += dt;
+      if (ECHO.blooms[bi].t > ECHO.blooms[bi].life) ECHO.blooms.splice(bi, 1);
+    }
     /* Your turn always wins. Note what this does NOT do: it does not throw the
        taps away. It used to, and a phrase is played with the finger DOWN, so
        every tap wiped the one before it and the app never held more than one -
@@ -7641,7 +7661,7 @@
     if (ECHO.on) {
       ECHO.k = Math.min(1, ECHO.k + dt * 4);
       ECHO.next -= dt;
-      var tgt = ECHO.taps[ECHO.i];
+      var tgt = ECHO.play[ECHO.i];
       if (!tgt) { echoStop(); return; }
       // the light slides to the next place and arrives on the beat
       var ease = 1 - Math.pow(0.0025, dt);
@@ -7650,15 +7670,19 @@
       if (ECHO.next <= 0) {
         ECHO.x = tgt.x; ECHO.y = tgt.y;
         echoNote(tgt.x, tgt.y);
-        wave(tctx, tgt.x, tgt.y, 16, world.hue + 90, 0.16);
-        blob(tctx, tgt.x, tgt.y, 9, world.hue + 120, 0.30);
-        for (var q = 0; q < 5; q++) {
-          var ang = Math.random() * TAU, sp = 60 + Math.random() * 90;
+        /* On the screen canvas, not the trail. A child taps the same corner
+           over and over, and now that every phrase is answered the reply
+           returns to those same fixed points every few seconds - which is the
+           exact recipe that scarred the ensemble's fingers white. */
+        ECHO.blooms.push({ x: tgt.x, y: tgt.y, t: 0, life: 0.8 });
+        if (ECHO.blooms.length > 10) ECHO.blooms.shift();
+        for (var q = 0; q < 3; q++) {
+          var ang = Math.random() * TAU, sp = 180 + Math.random() * 220;
           emitSpark(tgt.x, tgt.y, Math.cos(ang) * sp, Math.sin(ang) * sp,
-                    world.hue + 100 + rnd(-25, 25), 0.5);
+                    world.hue + 100 + rnd(-25, 25), 0.4);
         }
         ECHO.i++;
-        var nx2 = ECHO.taps[ECHO.i];
+        var nx2 = ECHO.play[ECHO.i];
         if (!nx2) { echoStop(); return; }
         ECHO.next = nx2.gap;
       }
@@ -7675,8 +7699,14 @@
     var span = taps[taps.length - 1].t - taps[0].t;
     if (span < 0.5) { taps.length = 0; return; }         // a double tap is not a rhythm
 
-    ECHO.cool = 11;
-    if (Math.random() < 0.2) { taps.length = 0; return; }    // not quite every time
+    /* Every phrase gets an answer. The rarity used to be the safeguard - a
+       long cooldown and a coin toss - but the safeguard was in the wrong
+       place: what stops this being a nuisance is that it will not speak until
+       you have genuinely stopped, and that the moment you touch anything it
+       shuts up mid-note and the turn is yours. Those two are unchanged. What
+       is left here is only long enough that a reply cannot set itself off
+       again on its own tail. */
+    ECHO.cool = 1.2;
 
     /* Slightly quicker than you played it, which is what makes it read as an
        answer rather than as a recording.
@@ -7710,13 +7740,34 @@
                  y: clamp(taps[i].y + offY, 24, H - 24),
                  gap: i ? clamp((taps[i].t - taps[i - 1].t) * 0.86, 0.10, 1.5) : 0 });
     }
-    ECHO.taps = seq; ECHO.on = true; ECHO.i = 0; ECHO.next = 0; ECHO.k = 0;
+    ECHO.play = seq; ECHO.taps = [];
+    ECHO.on = true; ECHO.i = 0; ECHO.next = 0; ECHO.k = 0;
     ECHO.x = seq[0].x; ECHO.y = seq[0].y;
   }
 
   function drawEcho(awake) {
+    var lit0 = 0.5 + awake * 0.5, i;
+    if (ECHO.blooms.length) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (i = ECHO.blooms.length - 1; i >= 0; i--) {
+        var bl = ECHO.blooms[i];
+        var bk = bl.t / bl.life, bf = (1 - bk) * (1 - bk);
+        var bh = norm360(world.hue + 100).toFixed(0);
+        ctx.beginPath();
+        ctx.arc(bl.x * DPR, bl.y * DPR, (10 + bk * 46) * DPR, 0, TAU);
+        ctx.lineWidth = (1 + bf * 4) * DPR;
+        ctx.strokeStyle = 'hsla(' + bh + ',96%,72%,' + (0.6 * bf * lit0).toFixed(3) + ')';
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(bl.x * DPR, bl.y * DPR, (7 + bk * 22) * DPR, 0, TAU);
+        ctx.fillStyle = 'hsla(' + bh + ',96%,64%,' + (0.20 * bf * lit0).toFixed(3) + ')';
+        ctx.fill();
+      }
+      ctx.restore();
+    }
     if (!ECHO.on) return;
-    var lit = (0.5 + awake * 0.5) * ECHO.k;
+    var lit = lit0 * ECHO.k;
     var hue = norm360(world.hue + 100).toFixed(0);
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
