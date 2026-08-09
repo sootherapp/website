@@ -4199,7 +4199,7 @@
     var live = 0;
     for (var i = 0; i < creatures.length; i++)
       if (creatures[i].world && creatures[i].vit > 0.2) live++;
-    if (live >= MAX_WORLDS) { worldNext = t + 25; return; }
+    if (live >= MAX_WORLDS) { worldNext = t + 6; return; }
     worldNext = t + (70 + Math.random() * 90) * paceGap();
     /* Somewhere with room around it, so one does not arrive on top of the other
        or half off the edge. */
@@ -4215,7 +4215,11 @@
       if (near > bd) { bd = near; best = { x: x, y: y }; }
     }
     if (!best) return;
-    castWorld(t, null, best.x, best.y);
+    /* If there was nothing available to turn into a world, try again shortly.
+       The long interval above has already been booked by this point, so a
+       silent failure here used to buy the room a full two minutes of no
+       planet for having briefly had no spare creature. */
+    if (!castWorld(t, null, best.x, best.y)) worldNext = t + 5;
   }
 
   function castWorld(t, holdC, atX, atY) {
@@ -4232,7 +4236,7 @@
         if (o.size < bd) { bd = o.size; best = o; }
       }
       c = best;
-      if (!c) return;
+      if (!c) return false;          // nothing here can be made into a world
     }
     if (c.held) { c.held.holding = null; c.held.cand = null; c.held = null; }
     c.x = atX === undefined ? rnd(W * 0.2, W * 0.8) : atX;
@@ -4284,6 +4288,7 @@
       emitSpark(c.x, c.y, Math.cos(a) * sp, Math.sin(a) * sp,
                 world.hue + c.hueOff + rnd(-50, 50), 1);
     }
+    return true;
   }
 
   /* The other end of the same story. A world stops being one either because it
@@ -4291,6 +4296,17 @@
      and both deserve the send-off. */
   function unWorld(c, t) {
     if (!c.world) return;
+    /* The next one is scheduled from THIS moment.
+       ------------------------------------------------------------
+       It used to be scheduled only from the last arrival - seventy to a
+       hundred and sixty seconds after a planet appeared - and a death did not
+       touch that. So wearing one away thirty seconds after it arrived bought
+       you two minutes of nothing, and the harder you played with a planet the
+       longer you waited for the next, which is precisely backwards.
+
+       A planet is the most interesting thing on the screen and there is only
+       ever one, so the gap after one goes should be a breath, not an absence. */
+    worldNext = t + rnd(6, 16) * paceGap();
     c.wear = 0;
     var cr3 = c.land;
     c.world = false;
@@ -8116,6 +8132,14 @@
      ============================================================ */
   var STONES = [];
   var STONE_MAX = 26;
+  /* Where each stone touched down, drawn the way the echo's replies are drawn:
+     a ring opening out on the SCREEN canvas over most of a second.
+
+     The first version put a small faint wave straight into the trail buffer
+     and moved on within a tenth of a second, which is neither long enough to
+     watch nor bright enough to see - a skipped stone is a thing you follow
+     across the water, and it was over before your eye arrived. */
+  var SPLASH = [];
 
   function skipStones(big, t) {
     var R = worldR(big);
@@ -8142,10 +8166,12 @@
       var st = STONES[i];
       st.wait -= dt;
       if (st.wait > 0) continue;
-      // it comes down: a ring on the water, and the next hop is shorter
+      // it comes down: a ring opening on the water, and the next hop is shorter
       var k = clamp(st.gap / 150, 0.15, 1);
-      wave(tctx, st.x, st.y, 9 + k * 16, st.hue, 0.10 + k * 0.14);
-      blob(tctx, st.x, st.y, 3 + k * 4, st.hue + 30, 0.16 + k * 0.20);
+      SPLASH.push({ x: st.x, y: st.y, hue: st.hue, k: k, t: 0,
+                    life: 0.55 + k * 0.45 });
+      if (SPLASH.length > 40) SPLASH.shift();
+      blob(tctx, st.x, st.y, 2.5 + k * 3, st.hue + 30, 0.10 + k * 0.10);
       addStir(st.x, st.y, 0.03 * k * (Math.random() < 0.5 ? -1 : 1), 0.14);
       if (st.sound && A.ok && A.started) {
         var sf = noteI(st.deg) * (k > 0.5 ? 1 : 2);
@@ -8154,12 +8180,15 @@
       }
       st.hops--;
       if (st.hops <= 0 || st.gap < 12) {
-        wave(tctx, st.x, st.y, 20, st.hue + 40, 0.10);
+        SPLASH.push({ x: st.x, y: st.y, hue: st.hue + 40, k: 1, t: 0, life: 1.1 });
         STONES.splice(i, 1); continue;
       }
       st.x += st.dx * st.gap; st.y += st.dy * st.gap;
       st.gap *= st.decay;
-      st.wait = 0.05 + st.gap * 0.0016;
+      /* Slower, and it still accelerates. The hops used to run from about a
+         quarter of a second down to a twentieth, which is the right SHAPE and
+         far too quick to follow - the last four landed as a single flicker. */
+      st.wait = 0.24 + st.gap * 0.0030;
       if (st.x < -40 || st.x > W + 40 || st.y < -40 || st.y > H + 40) STONES.splice(i, 1);
     }
   }
@@ -8231,9 +8260,46 @@
     }
   }
 
-  function drawStonesAndGifts(awake) {
-    if (!GIFTS.length) return;
+  function drawStonesAndGifts(awake, dt) {
     var lit = 0.5 + awake * 0.5;
+    var i;
+    // the splashes: exactly the treatment the echo's replies get
+    for (i = SPLASH.length - 1; i >= 0; i--) {
+      SPLASH[i].t += dt;
+      if (SPLASH[i].t > SPLASH[i].life) SPLASH.splice(i, 1);
+    }
+    if (SPLASH.length) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (i = 0; i < SPLASH.length; i++) {
+        var sp3 = SPLASH[i];
+        var sk = sp3.t / sp3.life;
+        /* Linear, not squared. Squared spends three quarters of the ring's
+           life below a quarter brightness, which over a dark field with
+           additive blending is a grey circle - and grey is exactly what a
+           skipped stone must not be, because the whole pleasure is following
+           a bright thing across the water. */
+        var sf = 1 - sk;
+        var sh = norm360(sp3.hue).toFixed(0);
+        var big2 = 0.45 + sp3.k * 0.55;
+        ctx.beginPath();
+        ctx.arc(sp3.x * DPR, sp3.y * DPR, (7 + sk * 50 * big2) * DPR, 0, TAU);
+        ctx.lineWidth = (1.6 + sf * 7) * DPR;
+        ctx.strokeStyle = 'hsla(' + sh + ',98%,72%,' + (1.0 * sf * lit).toFixed(3) + ')';
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(sp3.x * DPR, sp3.y * DPR, (5 + sk * 26 * big2) * DPR, 0, TAU);
+        ctx.fillStyle = 'hsla(' + sh + ',96%,62%,' + (0.30 * sf * lit).toFixed(3) + ')';
+        ctx.fill();
+        // and the moment of contact itself, which is the brightest thing
+        ctx.beginPath();
+        ctx.arc(sp3.x * DPR, sp3.y * DPR, (2 + sf * 6 * big2) * DPR, 0, TAU);
+        ctx.fillStyle = 'hsla(' + sh + ',98%,88%,' + (0.95 * sf * sf * lit).toFixed(3) + ')';
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    if (!GIFTS.length) return;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -8267,6 +8333,35 @@
 
   function pokeCreature(c, px, py, t) {
     world.poked++;
+    /* A PLANET IS A PLANET FIRST, before it is anything else.
+       ------------------------------------------------------------
+       This used to sit below the elder branch, and an elder can become a
+       world: measured, a rocky planet reporting elder true and world true,
+       whose tap went to the elder's answer and spread a ripple right on top of
+       itself. That is the third and last cause of "the rocky planet still
+       sends out ripples", after the dispatch and the fading-planet gates, and
+       it is the one that survived both earlier fixes because the probe kept
+       handing me a planet that happened not to be an elder.
+
+       Which identity wins matters more than it looks. An elder answers
+       generously and differently every time; a planet always does the same
+       thing, and being able to learn that is the whole of what makes planets
+       worth finding. So the specific, learnable one goes first. */
+    if (c.world) {
+      c.flare = Math.max(c.flare, 0.5);
+      c.mood = clamp(c.mood + 0.25, 0, 1);
+      if (c.ptype === 1) launchRockets(c, t);
+      else if (c.ptype === 2) launchFirework(c, t);
+      else if (c.ptype === 3) {
+        sendGift(c.x, c.y, giftTarget(c.x, c.y, c),
+                 1 + ((Math.random() * 5) | 0), world.hue + c.hueOff + rnd(20, 80));
+        if (A.ok && A.started) { voiceBg++; breath(noteI(1), 0.020, panOf(c.x), 0.45, 1.3); voiceBg--; }
+      } else {
+        skipStones(c, t);
+        if (A.ok && A.started) { voiceBg++; breath(noteI(3), 0.020, panOf(c.x), 0.5, 1.4); voiceBg--; }
+      }
+      return;
+    }
     if (c.elder) {
       // an elder always answers properly, and it is always a moment
       markMoment(c.x, c.y, world.hue + c.hueOff + 60, 'elder');
@@ -8303,21 +8398,6 @@
        ringed one puts up a firework. Tap the same planet all afternoon and it
        will do the same thing, and after meeting two or three of them you can
        tell from across the room which one you have. */
-    if (c.world) {
-      c.flare = Math.max(c.flare, 0.5);
-      c.mood = clamp(c.mood + 0.25, 0, 1);
-      if (c.ptype === 1) launchRockets(c, t);
-      else if (c.ptype === 2) launchFirework(c, t);
-      else if (c.ptype === 3) {
-        sendGift(c.x, c.y, giftTarget(c.x, c.y, c),
-                 1 + ((Math.random() * 5) | 0), world.hue + c.hueOff + rnd(20, 80));
-        if (A.ok && A.started) { voiceBg++; breath(noteI(1), 0.020, panOf(c.x), 0.45, 1.3); voiceBg--; }
-      } else {
-        skipStones(c, t);
-        if (A.ok && A.started) { voiceBg++; breath(noteI(3), 0.020, panOf(c.x), 0.5, 1.4); voiceBg--; }
-      }
-      return;
-    }
     var hue = world.hue + c.hueOff + 40;
     var P = choosePoke(c);
     /* No shared flash. Every answer used to be preceded by mood = 1 and a
@@ -12195,7 +12275,7 @@
 
     drawBubbles(t);
     drawEmbers();
-    drawStonesAndGifts(awake);
+    drawStonesAndGifts(awake, dt);
     drawWeb(awake);
     drawEnsemble(awake);
     drawFingers(PTR_LIST, awake);
