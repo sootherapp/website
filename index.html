@@ -2617,7 +2617,13 @@
     /* Remembered, in case you are playing a phrase. Only taps that got this
        far: a press on a lit note or a bubble has already been answered in its
        own way, and repeating those would be repeating the wrong thing. */
-    if (!ECHO.on) {
+    /* A phrase can only BEGIN in open water. Tapping a creature or a planet
+       over and over is a conversation with that creature - it is answering you
+       in its own voice each time - and having the room then repeat your
+       drumming back at you is one answer too many. Only the first tap is
+       judged: once a phrase is under way, catching a creature by accident
+       partway through should not throw the whole thing away. */
+    if (!ECHO.on && !(ECHO.taps.length === 0 && p.onBody)) {
       ECHO.taps.push({ t: t, x: tx0, y: ty0 });
       if (ECHO.taps.length > ECHO_MAX) ECHO.taps.shift();
     }
@@ -4205,9 +4211,14 @@
     c.hueOff = rnd(-40, 60);
     c.world = true;
     c.L = 1;                              // mid-depth, so they all drift alike
-    c.ptype = (Math.random() * 3) | 0;    // 0 rocky, 1 banded, 2 ringed
+    c.ptype = (Math.random() * 4) | 0;    // 0 rocky, 1 banded, 2 ringed, 3 dotted
     c.cloud = null;
-    makeLand(c, c.ptype === 1 ? 2 : 4, 1.5);
+    /* A dotted world is many small patches instead of a few large ones, which
+       is the whole of its face. It needs no new drawing code: makeLand already
+       scatters landmasses, and asking it for eleven small ones instead of four
+       big ones is the difference between a coastline and a speckle. */
+    makeLand(c, c.ptype === 3 ? 11 : (c.ptype === 1 ? 2 : 4),
+             c.ptype === 3 ? 0.55 : 1.5);
     /* One turn in twenty-odd seconds. Slow enough to be calm, fast enough that
        you can see it move while you are looking at it - which is the whole
        point of the spin: it says this is a world, and it says things are about
@@ -5132,7 +5143,8 @@
     /* Owns its own data. A creature can become a world by more than one route -
        forged by hand, or grown by swallowing enough - and relying on each
        caller to have seeded the surface first meant one of them did not. */
-    if (!c.land) makeLand(c, c.ptype === 1 ? 2 : 4, 1.5);
+    if (!c.land) makeLand(c, c.ptype === 3 ? 11 : (c.ptype === 1 ? 2 : 4),
+                          c.ptype === 3 ? 0.55 : 1.5);
     if (!c.cloud) {
       c.cloud = [];
       // three, not five. Twenty-five faint streaks on a small disc is fog.
@@ -6999,34 +7011,31 @@
      gesture needs a creature under each finger, so there is no collision -
      hands on creatures pinch, hands on water make a string.
      ============================================================ */
-  /* WHAT YOUR HANDS ARE DOING, decided once and then left alone.
+  /* ============================================================
+     PLACED, OR PASSING THROUGH
      ------------------------------------------------------------
-     Two fingers make a bridge and three or more make an ensemble, and the
-     first version worked that out fresh every frame - so laying down a third
-     finger tore the bridge away mid-note and threw you into something else.
-     A mode that can change under you while you are holding still is not a
-     mode, it is a fault.
+     Everything below hangs off one distinction, and it is a physical one
+     rather than a mode: a finger that is PUT DOWN AND LEFT is an anchor, and a
+     finger that is travelling is not.
 
-     So it is settled at the start of the gesture and then locked until every
-     finger has left the glass. Hold two fingers for a moment and you have a
-     bridge, and a third finger joins that bridge rather than replacing it -
-     it plucks. Put three down at once and you have the ensemble. Either way,
-     what you are holding stays what you are holding. */
-  var TOUCH = { mode: 'none', dwell: 0 };
-  var PTR_LIST = [];
-  var BRIDGE_DWELL = 0.42;      // long enough to be a decision, short enough to find
+     There used to be a global mode instead - two fingers meant a bridge,
+     three meant an ensemble, settled at the start of the gesture and locked so
+     it could not change under you. It worked, but it made the wrong thing
+     atomic. In a museum, hands arrive and leave one at a time and they are not
+     the same person's hands. A mode decided by the first two fingers cannot
+     describe a table where one child is holding three notes and another is
+     dragging a hand across them.
 
-  function handMode(n, dt) {
-    if (n === 0) { TOUCH.mode = 'none'; TOUCH.dwell = 0; return TOUCH.mode; }
-    if (TOUCH.mode === 'none') {
-      if (n >= 3) TOUCH.mode = 'beat';
-      else if (n === 2) {
-        TOUCH.dwell += dt;
-        if (TOUCH.dwell >= BRIDGE_DWELL) TOUCH.mode = 'bridge';
-      } else TOUCH.dwell = 0;
-    }
-    return TOUCH.mode;
-  }
+     Per finger, it needs no locking at all, because a finger cannot be in two
+     states at once: hold still and you are part of the instrument, sweep and
+     you are playing it. That is also exactly the difference a child performs
+     without being told.
+     ============================================================ */
+  var ANCHOR_DWELL = 0.15;    // still for this long
+  var ANCHOR_SLOP = 34;       // and it has not wandered more than this
+  var ANCHOR_FLEE = 470;      // and it drops out again if it takes off
+
+  var ANCH = [], SWIPERS = [], PTR_LIST = [];
 
   /* Each finger carries its own colour for as long as it is down, and the
      colours are spread far apart round the wheel so that in a museum three
@@ -7040,15 +7049,55 @@
     return p.mhue;
   }
 
-  var STR = {
-    on: false, a: null, b: null, k: 0,      // k is presence, it fades in and out
-    amp: 0.06, phase: 0, deg: 5, f: 220, mode: 1,
-    v: null, pluckCool: 0, hue: 0, pulses: []
+  function updateAnchors(list, dt, t) {
+    ANCH.length = 0; SWIPERS.length = 0;
+    for (var i = 0; i < list.length; i++) {
+      var p = list[i];
+      if (!p.down) { p.anchor = false; p.anchorDead = false; continue; }
+      if (p.anchor) {
+        // a hand that leaves is a hand that leaves, no hysteresis needed
+        if (Math.hypot(p.vx, p.vy) > ANCHOR_FLEE) { p.anchor = false; p.anchorDead = true; }
+      } else if (!p.anchorDead) {
+        if (p.path > ANCHOR_SLOP) p.anchorDead = true;          // it never stopped
+        else if (t - p.downAt >= ANCHOR_DWELL) p.anchor = true; // it did
+      }
+      if (p.anchor) { fingerHue(p); ANCH.push(p); }
+      else if (p.down) SWIPERS.push(p);
+    }
+  }
+
+  /* ============================================================
+     THE WEB
+     ------------------------------------------------------------
+     Every anchor is joined to its neighbours by a thread, and the threads sing
+     one note between them: how far apart your hands are is the pitch, wide and
+     low, close and high, snapped to the same pentatonic as everything else so
+     it cannot be played wrong.
+
+     Two anchors is one thread and nothing else. Three or more and the beat
+     starts (see THE BEAT below) and the threads become the frame it plays in.
+
+     Threads are THIN by default and they thicken when you strum them - drag a
+     finger across and every thread it crosses flares and settles back within
+     half a second. That is the only feedback a strum needs, and it is why a
+     creature drifting through does not do it: a creature crossing sounds the
+     note, because the web is an object lying in the world, but the flare
+     belongs to the person who did it.
+
+     One oscillator for the whole web however many hands are on it. Five
+     threads meaning five sustained voices is five times the load on a tablet
+     that already drops notes, and it would beat against itself rather than
+     ring. */
+  var WEB = {
+    on: false, k: 0, amp: 0.10, phase: 0, deg: 5, f: 220, mode: 1, hue: 0,
+    threads: [], beads: [], thick: {}, v: null, pluckCool: 0, beadNext: 0, sig: ''
   };
 
-  function strFree() {
-    if (!STR.v) return;
-    var v = STR.v; STR.v = null;
+  var BEAD_KINDS = ['runner', 'dawdler', 'wobbler', 'splitter'];
+
+  function webFree() {
+    if (!WEB.v) return;
+    var v = WEB.v; WEB.v = null;
     try {
       var nt = A.ctx.currentTime;
       v.g.gain.cancelScheduledValues(nt);
@@ -7062,164 +7111,159 @@
     } catch (e) {}
   }
 
-  function strEnd() {
-    if (STR.a) STR.a.strSide = 0;
-    if (STR.b) STR.b.strSide = 0;
-    for (var i = 0; i < creatures.length; i++) creatures[i].strSide = 0;
-    STR.on = false; STR.a = null; STR.b = null;
-    strFree();
+  function webEnd() {
+    WEB.on = false;
+    WEB.threads.length = 0;
+    WEB.beads.length = 0;
+    WEB.sig = '';
+    for (var i = 0; i < creatures.length; i++) creatures[i].wSide = null;
+    webFree();
   }
 
-  // does this finger have hold of the string? it may not also wind up a wave
-  function strOwns(p) { return STR.on && (p === STR.a || p === STR.b); }
-
-  function strPluck(x, y, hard, t) {
-    STR.amp = Math.min(1, STR.amp + (hard ? 0.55 : 0.30));
-    // two pulses run out from where it was struck, in both directions
-    if (STR.a && STR.b && STR.pulses.length < 12) {
-      var ax = STR.b.x - STR.a.x, ay = STR.b.y - STR.a.y;
-      var uu = clamp(((x - STR.a.x) * ax + (y - STR.a.y) * ay) /
-                     Math.max(1, ax * ax + ay * ay), 0, 1);
-      STR.pulses.push({ u: uu, sp: 0.9 + STR.deg * 0.05, hue: STR.hue + 40, r: hard ? 9 : 6 });
-      STR.pulses.push({ u: uu, sp: -(0.9 + STR.deg * 0.05), hue: STR.hue + 40, r: hard ? 9 : 6 });
-    }
-    burstRing(x, y, STR.hue + rnd(-20, 20), hard ? 9 : 5, hard ? 320 : 190, 0.55);
-    addStir(x, y, (hard ? 0.10 : 0.055) * (Math.random() < 0.5 ? -1 : 1), 0.20);
-    if (STR.pluckCool > 0 || !A.ok || !A.started) return;
-    STR.pluckCool = 0.09;
-    var f = STR.f, pan = panOf(x);
-    if (hard) mine(function () { pluck(f * 2, 0.045, pan); });
-    else ambient(function () { pluck(f * 2, 0.022, pan); });
+  function webPluck(x, y, hue, hard) {
+    WEB.amp = Math.min(1, WEB.amp + (hard ? 0.55 : 0.28));
+    burstRing(x, y, hue + rnd(-20, 20), hard ? 8 : 4, hard ? 340 : 200, 0.45);
+    if (WEB.pluckCool > 0 || !A.ok || !A.started) return;
+    WEB.pluckCool = 0.07;
+    var f = WEB.f, pan = panOf(x);
+    if (hard) mine(function () { pluck(f * 2, 0.042, pan); });
+    else ambient(function () { pluck(f * 2, 0.020, pan); });
   }
 
-  function updateString(list, dt, t) {
-    STR.pluckCool -= dt;
-    /* Whose string it is: the first two fingers down, and only if both landed
-       on water. A finger that has picked a creature up is doing something else
-       with its hand. */
-    var d1 = null, d2 = null, extra = [], i;
-    for (i = 0; i < list.length; i++) {
-      var lp = list[i];
-      if (!lp.down) continue;
-      fingerHue(lp);
-      if (!d1) d1 = lp; else if (!d2) d2 = lp; else extra.push(lp);
+  /* The threads are the ring round the outside of the hands, in the order they
+     sit round their own centre. A ring rather than every pair: four anchors
+     joined every-which-way is six lines through the middle and reads as a
+     scribble, where the ring reads as one shape everybody is standing on. It
+     also means each hand has exactly two threads whoever else joins. */
+  function rebuildThreads() {
+    var n = ANCH.length, i;
+    var sig = '';
+    for (i = 0; i < n; i++) sig += ANCH[i].id + ',';
+    if (sig === WEB.sig) return false;
+    WEB.sig = sig;
+    WEB.threads.length = 0;
+    WEB.beads.length = 0;
+    for (i = 0; i < creatures.length; i++) creatures[i].wSide = null;
+    if (n < 2) return true;
+    if (n === 2) {
+      WEB.threads.push({ a: ANCH[0], b: ANCH[1] });
+      return true;
     }
-    /* Whether it may START and whether it may CONTINUE are different
-       questions, and conflating them is what killed the first version. A
-       finger resting on water picks up whatever drifts under it after about a
-       quarter of a second, so on a busy screen both hands would quietly take
-       hold of something and the string would evaporate under them. Measured:
-       it survived fifteen frames out of a hundred and eighty.
+    var cx = 0, cy = 0;
+    for (i = 0; i < n; i++) { cx += ANCH[i].x; cy += ANCH[i].y; }
+    cx /= n; cy /= n;
+    var ring = ANCH.slice(0);
+    ring.sort(function (p1, p2) {
+      return Math.atan2(p1.y - cy, p1.x - cx) - Math.atan2(p2.y - cy, p2.x - cx);
+    });
+    for (i = 0; i < n; i++) WEB.threads.push({ a: ring[i], b: ring[(i + 1) % n] });
+    return true;
+  }
 
-       So the decision is made once, when the second finger lands, and it holds
-       until a hand leaves. What it does NOT do any more is take those fingers
-       away from everything else - they can still pick creatures up, and the
-       pinch still works underneath it. The first version claimed both hands
-       outright, which on a screen with three children on it is the wrong
-       instinct entirely. */
-    var pair = !!(TOUCH.mode === 'bridge' && d1 && d2 &&
-                  Math.hypot(d1.x - d2.x, d1.y - d2.y) > 78);
-    var same = STR.on && STR.a === d1 && STR.b === d2;
-    if (same) {
-      if (!pair) strEnd();                 // brought together, or a hand left
-    } else {
-      if (STR.on) strEnd();                // the pair itself changed
-      if (pair) {
-        STR.a = d1; STR.b = d2; STR.on = true; STR.amp = 0.30; STR.phase = 0;
-      STR.pulses.length = 0;
-        // a wind-up already under way on either hand yields to it
-        if (d1.charging) { d1.chargeCancelled = true; releaseCharge(d1, t); d1.chargeCancelled = false; }
-        if (d2.charging) { d2.chargeCancelled = true; releaseCharge(d2, t); d2.chargeCancelled = false; }
-        d1.mayCharge = false; d2.mayCharge = false;
+  function threadKey(th) {
+    return th.a.id < th.b.id ? th.a.id + '_' + th.b.id : th.b.id + '_' + th.a.id;
+  }
+
+  /* Did something cross this thread since last frame? One sign test on the
+     side of the line, plus where along it, which is all a crossing is. */
+  function crossedThread(th, x, y, prev, band) {
+    var ex = th.b.x - th.a.x, ey = th.b.y - th.a.y;
+    var dd = ex * ex + ey * ey;
+    if (dd < 1) return 0;
+    var cr = (x - th.a.x) * ey - (y - th.a.y) * ex;
+    var uu = ((x - th.a.x) * ex + (y - th.a.y) * ey) / dd;
+    var side = cr > 0 ? 1 : -1;
+    if (uu < 0.04 || uu > 0.96 || Math.abs(cr) / Math.sqrt(dd) > band) return 0;
+    if (prev && prev !== side) return side;
+    return prev ? 0 : side;      // first sight: remember which side, do not fire
+  }
+
+  function updateWeb(list, dt, t) {
+    WEB.pluckCool -= dt;
+    var i, j, th, key;
+
+    rebuildThreads();
+    var live = ANCH.length >= 2 && WEB.threads.length > 0;
+    WEB.on = live;
+    WEB.k = live ? Math.min(1, WEB.k + dt * 3.4) : Math.max(0, WEB.k - dt * 2.6);
+
+    // the flare a strum leaves, decaying fast enough to read as a flick
+    for (key in WEB.thick) {
+      if (!WEB.thick.hasOwnProperty(key)) continue;
+      WEB.thick[key] *= Math.pow(0.012, dt);
+      if (WEB.thick[key] < 0.01) delete WEB.thick[key];
+    }
+
+    if (!live) {
+      if (WEB.k <= 0.001) { if (WEB.v) webFree(); WEB.beads.length = 0; }
+      return;
+    }
+
+    /* Pitch from the average span of the web, so opening your hands out lowers
+       it exactly as it did when there were only two of them. */
+    var total = 0;
+    for (i = 0; i < WEB.threads.length; i++) {
+      th = WEB.threads[i];
+      total += Math.hypot(th.b.x - th.a.x, th.b.y - th.a.y);
+    }
+    var mean = total / WEB.threads.length;
+    var cx = 0, cy = 0;
+    for (i = 0; i < ANCH.length; i++) { cx += ANCH[i].x; cy += ANCH[i].y; }
+    cx /= ANCH.length; cy /= ANCH.length;
+
+    var u = clamp((mean - 78) / Math.max(160, DIAG * 0.72), 0, 1);
+    WEB.deg = clamp(Math.round((1 - u) * 9), 0, NOTES.length - 1);
+    WEB.f = noteI(WEB.deg) * octAt(cy);
+    WEB.mode = 1 + (WEB.deg > 6 ? 2 : (WEB.deg > 3 ? 1 : 0));
+    WEB.hue = world.hue + 30 + WEB.deg * 12;
+
+    // a strum: a travelling finger through a thread, and it leaves a mark
+    for (i = 0; i < SWIPERS.length; i++) {
+      var sp = SWIPERS[i];
+      if (!sp.wSide) sp.wSide = {};
+      for (j = 0; j < WEB.threads.length; j++) {
+        th = WEB.threads[j]; key = threadKey(th);
+        var hit = crossedThread(th, sp.x, sp.y, sp.wSide[key], 90);
+        if (hit && sp.wSide[key]) {
+          var ex2 = th.b.x - th.a.x, ey2 = th.b.y - th.a.y;
+          var dd2 = ex2 * ex2 + ey2 * ey2;
+          var uu2 = ((sp.x - th.a.x) * ex2 + (sp.y - th.a.y) * ey2) / dd2;
+          WEB.thick[key] = 1;
+          webPluck(th.a.x + ex2 * uu2, th.a.y + ey2 * uu2, fingerHue(sp), true);
+          beadBurst(j, uu2, fingerHue(sp));
+        }
+        if (hit) sp.wSide[key] = hit;
+      }
+    }
+    // and whatever drifts through on its own, which sounds but does not flare
+    for (i = 0; i < creatures.length; i++) {
+      var c = creatures[i];
+      if (c.vit < 0.3) { c.wSide = null; continue; }
+      if (!c.wSide) c.wSide = {};
+      for (j = 0; j < WEB.threads.length; j++) {
+        th = WEB.threads[j]; key = threadKey(th);
+        var chit = crossedThread(th, c.x, c.y, c.wSide[key], 26);
+        if (chit && c.wSide[key]) {
+          webPluck(c.x, c.y, world.hue + c.hueOff, false);
+          c.glowAdd = Math.max(c.glowAdd, 0.5);
+        }
+        if (chit) c.wSide[key] = chit;
       }
     }
 
-    var live = STR.on && STR.a && STR.b;
-    STR.k = live ? Math.min(1, STR.k + dt * 3.4) : Math.max(0, STR.k - dt * 2.6);
-    if (STR.k <= 0.001) { if (STR.v) strFree(); return; }
-    if (!live) return;
+    WEB.amp = Math.max(0.10, WEB.amp * Math.pow(0.976, dt * 60));
+    WEB.phase += dt * (5 + WEB.deg * 1.3);
+    updateBeads(dt);
 
-    var a = STR.a, b = STR.b;
-    var ex = b.x - a.x, ey = b.y - a.y;
-    var d = Math.hypot(ex, ey) || 1;
-    var mx = (a.x + b.x) * 0.5, my = (a.y + b.y) * 0.5;
-
-    /* Distance is pitch, quantised to the scale. Wide is low, which is the way
-       round every stringed thing in the world already works. */
-    /* Across most of the screen rather than half of it. At 0.52 the bottom
-       note arrived barely past the middle of a laptop window and the whole
-       lower half of the scale was unreachable by anyone with short arms. */
-    var u = clamp((d - 78) / Math.max(160, DIAG * 0.72), 0, 1);
-    STR.deg = clamp(Math.round((1 - u) * 9), 0, NOTES.length - 1);
-    STR.f = noteI(STR.deg) * octAt(my);
-    STR.mode = 1 + (STR.deg > 6 ? 2 : (STR.deg > 3 ? 1 : 0));
-    STR.hue = world.hue + 30 + STR.deg * 12;
-
-    /* A hand travelling fast is sweeping, not playing, so the string goes
-       quiet and leaves the rake and the chord to it. Hold still and it sings.
-       Nothing switches mode; it is one number either way. */
-    var hs = (Math.hypot(a.vx, a.vy) + Math.hypot(b.vx, b.vy)) * 0.5;
-    var still = 1 - clamp(hs / 620, 0, 1);
-    var lvl = STR.k * (0.16 + still * 0.84);
-
-    // a third finger through the line
-    for (i = 0; i < extra.length; i++) {
-      var ep = extra[i];
-      var cr = (ep.x - a.x) * ey - (ep.y - a.y) * ex;
-      var pu = ((ep.x - a.x) * ex + (ep.y - a.y) * ey) / (d * d);
-      var sd = cr > 0 ? 1 : -1;
-      if (pu > 0.05 && pu < 0.95 && Math.abs(cr) / d < 90) {
-        if (ep.strSide && ep.strSide !== sd) {
-          strPluck(a.x + ex * pu, a.y + ey * pu, true, t);
-        }
-        ep.strSide = sd;
-      } else ep.strSide = 0;
-    }
-    // and whatever drifts through it on its own
-    for (i = 0; i < creatures.length; i++) {
-      var c = creatures[i];
-      if (c.vit < 0.3) { c.strSide = 0; continue; }
-      var cc = (c.x - a.x) * ey - (c.y - a.y) * ex;
-      var cu = ((c.x - a.x) * ex + (c.y - a.y) * ey) / (d * d);
-      var cs = cc > 0 ? 1 : -1;
-      if (cu > 0.03 && cu < 0.97 && Math.abs(cc) / d < 30) {
-        if (c.strSide && c.strSide !== cs) {
-          strPluck(c.x, c.y, false, t);
-          c.glowAdd = Math.max(c.glowAdd, 0.5);
-        }
-        c.strSide = cs;
-      } else c.strSide = 0;
-    }
-
-    // it never quite stops moving, and a pluck rings out of it
-    STR.amp = Math.max(0.10, STR.amp * Math.pow(0.976, dt * 60));
-    STR.phase += dt * (5 + STR.deg * 1.3);
-
-    /* Light travels ALONG it, which is most of what turns a wire into a
-       bridge. One leaves an end every so often, faster when the note is
-       higher, and a pluck sends a pair out from where you struck it. */
-    var pl = STR.pulses;
-    for (i = pl.length - 1; i >= 0; i--) {
-      pl[i].u += pl[i].sp * dt;
-      if (pl[i].u < -0.05 || pl[i].u > 1.05) pl.splice(i, 1);
-    }
-    STR.pulseNext = (STR.pulseNext || 0) - dt;
-    if (STR.pulseNext <= 0 && pl.length < 10) {
-      STR.pulseNext = rnd(0.28, 0.75);
-      var fromA = Math.random() < 0.5;
-      pl.push({ u: fromA ? 0 : 1, sp: (fromA ? 1 : -1) * (0.45 + STR.deg * 0.06),
-                hue: fingerHue(fromA ? a : b) + rnd(-16, 16), r: rnd(4, 7) });
-    }
-
-    // and it drags the water with it, so carrying one carves a wide furrow
-    var msp = (Math.hypot(a.vx, a.vy) + Math.hypot(b.vx, b.vy)) * 0.5;
-    if (msp > 90) {
-      addStir(mx, my, 0.05 * clamp(msp / 800, 0.2, 1) * STR.k, 0.28, 'string');
-    }
+    // and the web drags the water with it as it is carried about
+    var msp = 0;
+    for (i = 0; i < ANCH.length; i++) msp += Math.hypot(ANCH[i].vx, ANCH[i].vy);
+    msp /= ANCH.length;
+    if (msp > 90) addStir(cx, cy, 0.05 * clamp(msp / 800, 0.2, 1) * WEB.k, 0.28, 'web');
 
     if (!A.ok || !A.started) return;
     var ac = A.ctx, nt = ac.currentTime;
-    if (!STR.v) {
+    if (!WEB.v) {
       try {
         var o = ac.createOscillator(); o.type = 'triangle';
         var lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.Q.value = 1.2;
@@ -7228,98 +7272,157 @@
         o.connect(lp); lp.connect(g);
         if (pn) { g.connect(pn); pn.connect(A.bus); } else { g.connect(A.bus); }
         o.start(nt);
-        STR.v = { o: o, lp: lp, g: g, pn: pn };
-      } catch (e) { STR.v = null; return; }
+        WEB.v = { o: o, lp: lp, g: g, pn: pn };
+      } catch (e) { WEB.v = null; return; }
     }
-    /* Retuned rather than restruck. The step to the next scale degree is fast
-       enough to hear as a change of note and slow enough not to click. */
-    STR.v.o.frequency.setTargetAtTime(STR.f, nt, 0.045);
-    STR.v.lp.frequency.setTargetAtTime(420 + STR.f * 2.6 + STR.amp * 900, nt, 0.09);
-    STR.v.g.gain.setTargetAtTime(lvl * (0.026 + STR.amp * 0.030), nt, 0.10);
-    if (STR.v.pn) STR.v.pn.pan.setTargetAtTime(panOf(mx) * 0.6, nt, 0.12);
+    WEB.v.o.frequency.setTargetAtTime(WEB.f, nt, 0.045);
+    WEB.v.lp.frequency.setTargetAtTime(420 + WEB.f * 2.6 + WEB.amp * 900, nt, 0.09);
+    WEB.v.g.gain.setTargetAtTime(WEB.k * (0.026 + WEB.amp * 0.030), nt, 0.10);
+    if (WEB.v.pn) WEB.v.pn.pan.setTargetAtTime(panOf(cx) * 0.6, nt, 0.12);
   }
 
-  /* Drawn on the SCREEN canvas, every frame, from nothing.
-     A held string barely moves, and the trail buffer is never cleared - only
-     veiled - so anything that sits still in it burns a hole. That is the same
-     mistake the planet halo and the ember ring each made once. The sparks a
-     pluck throws off are welcome to the trail, because they travel. */
-  function drawString(awake) {
-    if (STR.k <= 0.004 || !STR.a || !STR.b) return;
-    var a = STR.a, b = STR.b;
-    var ex = b.x - a.x, ey = b.y - a.y;
-    var d = Math.hypot(ex, ey) || 1;
-    var nx = -ey / d, ny = ex / d;
-    var swing = STR.amp * Math.min(d * 0.16, 62) * Math.sin(STR.phase * 6.0);
-    var lit = (0.45 + awake * 0.55) * STR.k;
-    var hue = norm360(STR.hue).toFixed(0);
-    var N = 30, i, u2, off;
+  /* ---- the beads ----
+     Lights running along the threads, and each one is a different colour and
+     has a mind of its own. They are the thing to watch when it is not your
+     note's turn: a runner just goes, a dawdler stalls in the middle and then
+     bolts, a wobbler weaves as it travels, and a splitter reaches the middle
+     and becomes two going opposite ways. */
+  var BEAD_HUES = [0, 32, 58, 96, 150, 190, 214, 268, 300, 330];
+
+  function addBead(ti, u, dir, hue, kind) {
+    if (WEB.beads.length > 22) return;
+    WEB.beads.push({
+      ti: ti, u: u, sp: dir * (0.40 + WEB.deg * 0.05) * rnd(0.8, 1.3),
+      hue: hue === undefined ? world.hue + pick(BEAD_HUES) : hue,
+      kind: kind || pick(BEAD_KINDS),
+      r: rnd(4.5, 8), age: 0, wob: rnd(0, TAU), stall: 0, split: false
+    });
+  }
+
+  function beadBurst(ti, u, hue) {
+    addBead(ti, u, 1, hue, 'runner');
+    addBead(ti, u, -1, hue, 'runner');
+  }
+
+  function updateBeads(dt) {
+    WEB.beadNext -= dt;
+    if (WEB.beadNext <= 0 && WEB.threads.length) {
+      WEB.beadNext = rnd(0.30, 0.85) / Math.max(1, WEB.threads.length * 0.5);
+      var ti = (Math.random() * WEB.threads.length) | 0;
+      var fromA = Math.random() < 0.5;
+      addBead(ti, fromA ? 0 : 1, fromA ? 1 : -1);
+    }
+    for (var i = WEB.beads.length - 1; i >= 0; i--) {
+      var bd = WEB.beads[i];
+      bd.age += dt;
+      if (bd.ti >= WEB.threads.length) { WEB.beads.splice(i, 1); continue; }
+      if (bd.kind === 'dawdler') {
+        var near = Math.abs(bd.u - 0.5) < 0.06;
+        if (near && bd.stall < 0.45) { bd.stall += dt; continue; }   // holding its breath
+        bd.u += bd.sp * dt * (bd.stall > 0 ? 2.6 : 1);               // then bolting
+      } else if (bd.kind === 'splitter') {
+        if (!bd.split && ((bd.sp > 0 && bd.u >= 0.5) || (bd.sp < 0 && bd.u <= 0.5))) {
+          bd.split = true;
+          addBead(bd.ti, 0.5, bd.sp > 0 ? -1 : 1, bd.hue + 40, 'runner');
+        }
+        bd.u += bd.sp * dt;
+      } else {
+        if (bd.kind === 'wobbler') bd.wob += dt * 9;
+        bd.u += bd.sp * dt;
+      }
+      if (bd.u < -0.06 || bd.u > 1.06) WEB.beads.splice(i, 1);
+    }
+  }
+
+  /* Drawn on the SCREEN canvas, every frame, from nothing. A held web barely
+     moves, and the trail buffer is never cleared - only veiled - so anything
+     drawn repeatedly at a spot that does not move burns a hole there. That is
+     the fourth time that buffer has caught something out in this file. */
+  function drawWeb(awake) {
+    if (WEB.k <= 0.004 || !WEB.threads.length) return;
+    var lit = (0.45 + awake * 0.55) * WEB.k;
+    var i, j, u2, off;
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    /* Three passes, widest first. The first attempt drew a pixel and a half of
-       core against creatures forty pixels across and simply was not there -
-       the same miss the rockets made. It is the loudest thing you can be doing
-       and it should be the brightest thing on the screen while you do it. */
-    var WIDE = [16, 6, 2.6], ALPH = [0.11, 0.26, 0.90], LIGHT = ['52%', '62%', '78%'];
-    for (var pass = 0; pass < 3; pass++) {
-      ctx.beginPath();
-      for (i = 0; i <= N; i++) {
-        u2 = i / N;
-        off = Math.sin(Math.PI * u2 * STR.mode) * swing;
-        var px2 = (a.x + ex * u2 + nx * off) * DPR;
-        var py2 = (a.y + ey * u2 + ny * off) * DPR;
-        if (i) ctx.lineTo(px2, py2); else ctx.moveTo(px2, py2);
+
+    for (i = 0; i < WEB.threads.length; i++) {
+      var th = WEB.threads[i];
+      var key = threadKey(th);
+      var flare = WEB.thick[key] || 0;
+      var ex = th.b.x - th.a.x, ey = th.b.y - th.a.y;
+      var d = Math.hypot(ex, ey) || 1;
+      var nx = -ey / d, ny = ex / d;
+      var swing = (WEB.amp * 0.5 + flare * 0.9) * Math.min(d * 0.14, 54) *
+                  Math.sin(WEB.phase * 6.0 + i);
+      var hue = norm360(WEB.hue + i * 9).toFixed(0);
+      /* Thin unless struck. The default is a wire you can see past; a strum
+         takes it to four times that within a frame and it settles back on its
+         own, which is the whole of the feedback. */
+      var WIDE = [7 + flare * 22, 2.4 + flare * 7, 1.1 + flare * 2.6];
+      var ALPH = [(0.05 + flare * 0.18), (0.11 + flare * 0.34), (0.42 + flare * 0.55)];
+      var LIGHT = ['52%', '64%', '82%'];
+      /* The broad halo is only painted on a thread that has just been struck.
+         Five threads at three wide additive strokes each measured 1.6ms a
+         frame, and on the thin default that widest pass is barely visible
+         anyway - it is there to make a strum bloom, so it is drawn when there
+         is a strum to bloom. */
+      var first = (flare > 0.02 || WEB.threads.length <= 2) ? 0 : 1;
+      for (var pass = first; pass < 3; pass++) {
+        ctx.beginPath();
+        for (j = 0; j <= 24; j++) {
+          u2 = j / 24;
+          off = Math.sin(Math.PI * u2 * WEB.mode) * swing;
+          var px2 = (th.a.x + ex * u2 + nx * off) * DPR;
+          var py2 = (th.a.y + ey * u2 + ny * off) * DPR;
+          if (j) ctx.lineTo(px2, py2); else ctx.moveTo(px2, py2);
+        }
+        ctx.lineWidth = WIDE[pass] * DPR;
+        ctx.strokeStyle = 'hsla(' + hue + ',94%,' + LIGHT[pass] + ',' +
+                          (ALPH[pass] * lit).toFixed(3) + ')';
+        ctx.stroke();
       }
-      ctx.lineWidth = WIDE[pass] * DPR;
-      ctx.strokeStyle = 'hsla(' + hue + ',94%,' + LIGHT[pass] + ',' +
-                        (ALPH[pass] * lit).toFixed(3) + ')';
-      ctx.stroke();
-    }
-    /* A second strand at the opposite phase. Two lines crossing and parting
-       along their length read as a woven thing with width; one line reads as a
-       wire however bright it is. */
-    ctx.beginPath();
-    for (i = 0; i <= N; i++) {
-      u2 = i / N;
-      off = Math.sin(Math.PI * u2 * STR.mode) * -swing * 0.62;
-      ctx.lineTo((a.x + ex * u2 + nx * off) * DPR, (a.y + ey * u2 + ny * off) * DPR);
-    }
-    ctx.lineWidth = 1.8 * DPR;
-    ctx.strokeStyle = 'hsla(' + norm360(STR.hue + 60).toFixed(0) + ',94%,72%,' +
-                      (0.42 * lit).toFixed(3) + ')';
-    ctx.stroke();
-
-    // and the light running along it
-    for (i = 0; i < STR.pulses.length; i++) {
-      var pz = STR.pulses[i];
-      var pu2 = clamp(pz.u, 0, 1);
-      var poff = Math.sin(Math.PI * pu2 * STR.mode) * swing;
-      var qx = (a.x + ex * pu2 + nx * poff) * DPR;
-      var qy = (a.y + ey * pu2 + ny * poff) * DPR;
-      var edge = Math.min(1, Math.min(pu2, 1 - pu2) * 6 + 0.25);
-      ctx.beginPath();
-      ctx.arc(qx, qy, pz.r * 2.6 * DPR, 0, TAU);
-      ctx.fillStyle = 'hsla(' + norm360(pz.hue).toFixed(0) + ',94%,60%,' +
-                      (0.16 * lit * edge).toFixed(3) + ')';
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(qx, qy, pz.r * DPR, 0, TAU);
-      ctx.fillStyle = 'hsla(' + norm360(pz.hue).toFixed(0) + ',98%,82%,' +
-                      (0.85 * lit * edge).toFixed(3) + ')';
-      ctx.fill();
     }
 
-    // the two ends are where your hands are, so they get a knot of light
-    for (i = 0; i < 2; i++) {
-      var e2 = i ? b : a;
+    // the beads, riding whichever thread they belong to
+    for (i = 0; i < WEB.beads.length; i++) {
+      var bd = WEB.beads[i];
+      var th2 = WEB.threads[bd.ti];
+      if (!th2) continue;
+      var ex2 = th2.b.x - th2.a.x, ey2 = th2.b.y - th2.a.y;
+      var d2 = Math.hypot(ex2, ey2) || 1;
+      var nx2 = -ey2 / d2, ny2 = ex2 / d2;
+      var bu = clamp(bd.u, 0, 1);
+      var sw2 = (WEB.amp * 0.5) * Math.min(d2 * 0.14, 54) *
+                Math.sin(Math.PI * bu * WEB.mode) * Math.sin(WEB.phase * 6.0 + bd.ti);
+      var wob = bd.kind === 'wobbler' ? Math.sin(bd.wob) * 13 : 0;
+      var bx = th2.a.x + ex2 * bu + nx2 * (sw2 + wob);
+      var by = th2.a.y + ey2 * bu + ny2 * (sw2 + wob);
+      var bh = norm360(bd.hue).toFixed(0);
+      var swell = bd.kind === 'dawdler' && bd.stall > 0 && bd.stall < 0.45
+                ? 1 + bd.stall * 2.4 : 1;
       ctx.beginPath();
-      ctx.arc(e2.x * DPR, e2.y * DPR, (13 + STR.amp * 9) * DPR, 0, TAU);
-      ctx.fillStyle = 'hsla(' + hue + ',94%,58%,' + (0.15 * lit).toFixed(3) + ')';
+      ctx.arc(bx * DPR, by * DPR, bd.r * 2.6 * swell * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + bh + ',96%,58%,' + (0.16 * lit).toFixed(3) + ')';
       ctx.fill();
       ctx.beginPath();
-      ctx.arc(e2.x * DPR, e2.y * DPR, (5 + STR.amp * 5) * DPR, 0, TAU);
-      ctx.fillStyle = 'hsla(' + hue + ',96%,78%,' + (0.60 * lit).toFixed(3) + ')';
+      ctx.arc(bx * DPR, by * DPR, bd.r * swell * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + bh + ',98%,80%,' + (0.85 * lit).toFixed(3) + ')';
+      ctx.fill();
+      blob(tctx, bx, by, 2.4, bd.hue + 20, 0.06 * lit);
+    }
+
+    // and a knot of light where each hand is holding on
+    for (i = 0; i < ANCH.length; i++) {
+      var e2 = ANCH[i];
+      var eh = norm360(fingerHue(e2)).toFixed(0);
+      ctx.beginPath();
+      ctx.arc(e2.x * DPR, e2.y * DPR, (13 + WEB.amp * 9) * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + eh + ',94%,58%,' + (0.15 * lit).toFixed(3) + ')';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(e2.x * DPR, e2.y * DPR, (5 + WEB.amp * 5) * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + eh + ',96%,80%,' + (0.62 * lit).toFixed(3) + ')';
       ctx.fill();
     }
     ctx.restore();
@@ -7347,10 +7450,113 @@
      way to take part - your note keeps coming round whether you move or not.
      ============================================================ */
   var ENS = {
-    on: false, k: 0, step: 0.24, next: 0, density: 0.55,
-    rep: 0, last: null, noteCool: 0, arcs: [], hits: []
+    on: false, k: 0, step: 0.22, next: 0,
+    motif: null, pos: 0, reps: 0, noteCool: 0, arcs: [], hits: []
   };
+  var BAR = 8;
   var ARC_MAX = 5;
+
+  /* WHAT THE NOTES ARE.
+     ------------------------------------------------------------
+     Each finger keeps the note of the place it is on - that rule is older than
+     this and it is not up for negotiation, because it is how a child works out
+     that where they put their hand is what they hear. But four fingers dropped
+     anywhere on the glass can easily land on four neighbouring degrees in one
+     octave, and a pentatonic cluster inside a fifth is a smudge however
+     consonant it is.
+
+     So the degree is left exactly where the finger put it and only the OCTAVE
+     is tidied: run through them from low to high and any note sitting on top
+     of the one below is lifted an octave clear. Nobody's note changes which
+     note it is, and the set comes out as a spread chord instead of a pile. */
+  function voiceAnchors(downs) {
+    var v = [], i;
+    for (i = 0; i < downs.length; i++) {
+      v.push({ p: downs[i], f: noteI(noteIdxAt(downs[i].x)) * octAt(downs[i].y) });
+    }
+    v.sort(function (m, n) { return m.f - n.f; });
+    /* Lifted clear, but never into a squeak. The ceiling was 2400 and three
+       fingers landing close together climbed all the way to it; a note that
+       high stops sounding like a voice in the chord and starts sounding like
+       a fault. Above the ceiling a doubled note is simply allowed to stand,
+       which in a pentatonic is a unison and perfectly pleasant. */
+    for (i = 1; i < v.length; i++) {
+      while (v[i].f < v[i - 1].f * 1.06 && v[i].f * 2 < 1600) v[i].f *= 2;
+    }
+    for (i = 0; i < v.length; i++) v[i].p.beatF = v[i].f;
+    return v;         // ascending, so v[0] is the bass
+  }
+
+  /* A BAR, not a sprinkle.
+     ------------------------------------------------------------
+     The first version put a note down whenever a drifting probability said so,
+     which is a scatter: there is no beat one, so there is nothing to feel
+     coming, and nothing ever comes back. Music that sounds composed and is
+     still never the same twice needs three things, and none of them are extra
+     randomness.
+
+     A BAR, so there is a downbeat to lean on. Eight steps, and the first of
+     them nearly always sounds.
+
+     A MOTIF, so it repeats. A figure is chosen once and played several times
+     over, mutating a step or two each time round, before a new one is chosen.
+     That single change is most of the difference between a tune and a shuffle,
+     and it costs one array.
+
+     A BASS. The downbeat belongs to the lowest note on the table, every bar,
+     so however many hands arrive there is always something holding the floor. */
+  function newMotif(n) {
+    var m = [], s2, i;
+    /* Fuller with more hands on it. At a fixed density five children shared
+       out the same four notes a bar that three did, and measured over ten
+       seconds one of the five was never played at all - which in a room where
+       each finger belongs to a different child is the one unforgivable
+       outcome. */
+    var density = clamp(0.30 + n * 0.07, 0.30, 0.72);
+    for (s2 = 0; s2 < BAR; s2++) {
+      var strong = (s2 === 0), half = (s2 === 4);
+      var hit = strong ? true : (half ? Math.random() < 0.80 : Math.random() < density);
+      m.push(hit ? { i: 0, acc: strong ? 1 : (half ? 0.85 : (s2 & 1 ? 0.55 : 0.72)),
+                     bass: strong } : null);
+    }
+    /* And the notes are DEALT rather than drawn. Picking each step's finger at
+       random independently means a bar can land on the same hand three times
+       and skip two others; dealing from a shuffled pack means everybody is
+       played once before anybody is played twice. Same unpredictability, no
+       starving. */
+    var pack = [];
+    for (i = 0; i < n; i++) pack.push(i);
+    for (i = pack.length - 1; i > 0; i--) {
+      var j = (Math.random() * (i + 1)) | 0, sw = pack[i]; pack[i] = pack[j]; pack[j] = sw;
+    }
+    var deal = 0;
+    for (s2 = 0; s2 < BAR; s2++) {
+      if (!m[s2] || m[s2].bass) continue;
+      m[s2].i = pack[deal % pack.length];
+      deal++;
+      if (deal % pack.length === 0) {
+        for (i = pack.length - 1; i > 0; i--) {
+          var j2 = (Math.random() * (i + 1)) | 0, s3 = pack[i]; pack[i] = pack[j2]; pack[j2] = s3;
+        }
+      }
+    }
+    return m;
+  }
+
+  function mutateMotif(m, n, downs, t) {
+    var k = 1 + ((Math.random() * 2) | 0);
+    while (k--) {
+      var s2 = 1 + ((Math.random() * (BAR - 1)) | 0);      // never the downbeat
+      if (m[s2] && Math.random() < 0.40) { m[s2] = null; continue; }
+      // a new note goes to whoever has been waiting longest for one
+      var pickI = 0, oldest = -1;
+      for (var i = 0; i < n; i++) {
+        var age = t - ((downs[i] && downs[i].hitAt) || 0) + Math.random() * 0.6;
+        if (age > oldest) { oldest = age; pickI = i; }
+      }
+      m[s2] = { i: pickI, acc: s2 === 4 ? 0.85 : (s2 & 1 ? 0.55 : 0.72), bass: false };
+    }
+  }
 
   function ensNote(p, t, vel) {
     var hue = fingerHue(p);
@@ -7380,9 +7586,15 @@
     if (ENS.hits.length > 14) ENS.hits.shift();
     if (ENS.noteCool > 0 || !A.ok || !A.started) return;
     ENS.noteCool = 0.10;
-    var f = noteI(noteIdxAt(p.x)) * octAt(p.y);
+    var f = p.beatF || (noteI(noteIdxAt(p.x)) * octAt(p.y));
     var pan = panOf(p.x);
-    mine(function () { chime(f, 0.030 * vel, pan, 0.9, 2.2); });
+    /* Longer and rounder underneath, shorter and brighter on top, which is
+       what stops a chord of held notes turning into a drone: the bass rings
+       through the bar and the upper voices get out of its way. */
+    var low = f < 200;
+    var dur = low ? 3.4 : 1.6 + Math.random() * 0.9;
+    var lvl = (low ? 0.036 : 0.026) * vel;
+    mine(function () { chime(f, lvl, pan, low ? 0.55 : 1.05, dur); });
   }
 
   function ensLeap(from, to, t) {
@@ -7408,7 +7620,7 @@
   }
 
   function updateEnsemble(downs, dt, t) {
-    var live = TOUCH.mode === 'beat' && downs.length >= 2;
+    var live = downs.length >= 3;
     ENS.on = live;
     ENS.k = live ? Math.min(1, ENS.k + dt * 3) : Math.max(0, ENS.k - dt * 2);
     ENS.noteCool -= dt;
@@ -7432,46 +7644,52 @@
     }
     if (!live) return;
 
-    /* The beat drifts rather than being set. Both the grid and how full it is
-       wander slowly, so it speeds up and thins out on its own and never
-       settles into a loop you could clap along to. */
-    ENS.step = clamp(ENS.step + rnd(-0.9, 0.9) * dt, 0.15, 0.42);
-    ENS.density = clamp(ENS.density + rnd(-0.5, 0.5) * dt, 0.30, 0.85);
+    /* The tempo drifts, slowly, but the BAR does not - so it can quicken and
+       ease off the way a person would without ever losing the one. */
+    ENS.step = clamp(ENS.step + rnd(-0.35, 0.35) * dt, 0.15, 0.34);
+
+    var voiced = voiceAnchors(downs);
+    if (!ENS.motif || ENS.motif.n !== downs.length) {
+      ENS.motif = newMotif(downs.length);
+      ENS.motif.n = downs.length;
+      ENS.pos = 0; ENS.reps = 0; ENS.next = 0;
+    }
 
     ENS.next -= dt;
     if (ENS.next > 0) return;
-    /* More hands, faster grid. Left alone, five fingers shared out the same
-       number of notes as three did and each child waited nearly twice as long
-       between their own - measured at three to six hits each in eight seconds.
-       The point of the beat is that your note keeps coming round. */
-    ENS.next = ENS.step / clamp(1 + (downs.length - 3) * 0.22, 1, 1.9);
-    if (Math.random() > ENS.density) return;          // a rest, and rests matter
+    // more hands, a slightly brisker grid, so a bar does not sag under six
+    ENS.next = ENS.step / clamp(1 + (downs.length - 3) * 0.12, 1, 1.5);
 
-    var pick2 = null;
-    if (ENS.rep > 0 && ENS.last && ENS.last.down) {
-      ENS.rep--; pick2 = ENS.last;                     // striking the same one again
-    } else {
-      /* Whoever has waited longest, mostly. Pure random leaves a finger
-         untouched for ages, and in a room where each finger belongs to a
-         different child that is the one thing this must not do. */
-      var best = null, bestAge = -1;
-      for (i = 0; i < downs.length; i++) {
-        var q = downs[i];
-        var age = t - (q.hitAt || 0) + Math.random() * 1.2;
-        if (age > bestAge) { bestAge = age; best = q; }
+    var slot2 = ENS.motif[ENS.pos];
+    var atBarEnd = ENS.pos === BAR - 1;
+    ENS.pos = (ENS.pos + 1) % BAR;
+    if (ENS.pos === 0) {
+      /* Round again. Played straight two to four times, changing a step or two
+         each pass, and then something new - which is long enough to be
+         recognised and short enough never to become wallpaper. */
+      ENS.reps++;
+      if (ENS.reps >= 2 + ((Math.random() * 3) | 0)) {
+        ENS.motif = newMotif(downs.length); ENS.motif.n = downs.length; ENS.reps = 0;
+      } else if (Math.random() < 0.8) {
+        mutateMotif(ENS.motif, downs.length, downs, t);
       }
-      pick2 = best;
-      if (Math.random() < 0.22) ENS.rep = 1 + ((Math.random() * 2) | 0);
     }
-    if (!pick2) return;
-    ENS.last = pick2;
-    ensNote(pick2, t, 0.75 + Math.random() * 0.45);
+    if (!slot2) return;                                  // a rest, and rests matter
 
-    // and sometimes it throws to somebody else
-    if (downs.length > 1 && Math.random() < 0.42) {
+    var target = slot2.bass && voiced.length
+               ? voiced[0].p
+               : downs[slot2.i % downs.length];
+    if (!target || !target.down) return;
+    ensNote(target, t, slot2.acc);
+
+    /* The leap goes on the off-beats. On the downbeat there is already the
+       bass and a ring opening out, and a ribbon crossing the screen on top of
+       that is one thing too many at the exact moment the bar wants to be
+       clear. */
+    if (downs.length > 2 && !slot2.bass && Math.random() < (atBarEnd ? 0.55 : 0.3)) {
       var others = [];
-      for (i = 0; i < downs.length; i++) if (downs[i] !== pick2) others.push(downs[i]);
-      if (others.length) ensLeap(pick2, pick(others), t);
+      for (i = 0; i < downs.length; i++) if (downs[i] !== target) others.push(downs[i]);
+      if (others.length) ensLeap(target, pick(others), t);
     }
   }
 
@@ -7550,23 +7768,6 @@
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-
-    /* A faint web joining everybody who is touching, drawn only once three
-       hands are on it. Between leaps there would otherwise be nothing at all
-       between the fingers, and the thing three children round a table need to
-       see first is that they are in the same picture. */
-    if (down.length >= 3 && ENS.k > 0.02) {
-      ctx.beginPath();
-      for (i = 0; i < down.length; i++) {
-        if (i) ctx.lineTo(down[i].x * DPR, down[i].y * DPR);
-        else ctx.moveTo(down[i].x * DPR, down[i].y * DPR);
-      }
-      ctx.closePath();
-      ctx.lineWidth = 1.4 * DPR;
-      ctx.strokeStyle = 'hsla(' + norm360(world.hue + 60).toFixed(0) + ',80%,62%,' +
-                        (0.12 * lit * ENS.k).toFixed(3) + ')';
-      ctx.stroke();
-    }
 
     /* And each finger keeps its own colour. Bright enough to find from across
        a room and saturated enough to stay that colour when it is struck - the
@@ -7783,6 +7984,170 @@
     blob(tctx, ECHO.x, ECHO.y, 3.6, world.hue + 110, 0.16 * lit);
   }
 
+  /* ============================================================
+     SKIPPED STONES
+     ------------------------------------------------------------
+     Tap a rocky planet and it skips a few stones out across the water. Each
+     one leaves in its own direction and touches down again and again, and the
+     spacing is the whole point: the first hop carries a long way, and every
+     one after it is shorter than the last until the stone runs out and sinks.
+
+     That decreasing gap is the only thing that makes it read as skipping
+     rather than as a row of dots, and it is one multiply - each hop is a fixed
+     fraction of the one before, which is what a real stone does as it loses
+     the energy to lift itself out again.
+     ============================================================ */
+  var STONES = [];
+  var STONE_MAX = 26;
+
+  function skipStones(big, t) {
+    var R = worldR(big);
+    var n = 2 + ((Math.random() * 4) | 0);
+    var voice = 0;
+    for (var i = 0; i < n && STONES.length < STONE_MAX; i++) {
+      var ang = Math.random() * TAU;
+      var gap = rnd(90, 150);
+      STONES.push({
+        x: big.x + Math.cos(ang) * R * 0.95, y: big.y + Math.sin(ang) * R * 0.95,
+        dx: Math.cos(ang), dy: Math.sin(ang),
+        gap: gap, decay: rnd(0.66, 0.80),
+        wait: 0, hops: 5 + ((Math.random() * 5) | 0),
+        hue: world.hue + big.hueOff + rnd(10, 60),
+        deg: 2 + ((Math.random() * 5) | 0),
+        sound: voice++ < 2
+      });
+    }
+    flash(big.x, big.y, world.hue + big.hueOff + 30, R * 1.1, 0.16);
+  }
+
+  function updateStones(dt, t) {
+    for (var i = STONES.length - 1; i >= 0; i--) {
+      var st = STONES[i];
+      st.wait -= dt;
+      if (st.wait > 0) continue;
+      // it comes down: a ring on the water, and the next hop is shorter
+      var k = clamp(st.gap / 150, 0.15, 1);
+      wave(tctx, st.x, st.y, 9 + k * 16, st.hue, 0.10 + k * 0.14);
+      blob(tctx, st.x, st.y, 3 + k * 4, st.hue + 30, 0.16 + k * 0.20);
+      addStir(st.x, st.y, 0.03 * k * (Math.random() < 0.5 ? -1 : 1), 0.14);
+      if (st.sound && A.ok && A.started) {
+        var sf = noteI(st.deg) * (k > 0.5 ? 1 : 2);
+        var sp2 = panOf(st.x), sv = 0.012 + k * 0.014;
+        ambient(function () { drop(sf, sv, sp2); });
+      }
+      st.hops--;
+      if (st.hops <= 0 || st.gap < 12) {
+        wave(tctx, st.x, st.y, 20, st.hue + 40, 0.10);
+        STONES.splice(i, 1); continue;
+      }
+      st.x += st.dx * st.gap; st.y += st.dy * st.gap;
+      st.gap *= st.decay;
+      st.wait = 0.05 + st.gap * 0.0016;
+      if (st.x < -40 || st.x > W + 40 || st.y < -40 || st.y > H + 40) STONES.splice(i, 1);
+    }
+  }
+
+  /* ============================================================
+     THE GIFT
+     ------------------------------------------------------------
+     Tap a dotted planet and it throws one arc of light out into the field. It
+     lands on a creature, which lights up - and then, sometimes, passes it on
+     to another, and that one to another. Sometimes it stops at the first.
+     Sometimes it goes five deep across the whole screen.
+
+     One arc in the air at a time from any one tap, because the pleasure here
+     is following a single thing and wondering where it will go next, and four
+     of them at once is a firework, which is what the ringed planet is for.
+     ============================================================ */
+  var GIFTS = [];
+
+  function giftTarget(fromX, fromY, notThis) {
+    var best = [], i;
+    for (i = 0; i < creatures.length; i++) {
+      var c = creatures[i];
+      if (c.vit < 0.4 || c === notThis || c.world) continue;
+      var d = Math.hypot(c.x - fromX, c.y - fromY);
+      if (d > 60) best.push(c);
+    }
+    return best.length ? pick(best) : null;
+  }
+
+  function sendGift(fromX, fromY, target, hops, hue) {
+    if (!target || GIFTS.length > 6) return;
+    var d = Math.hypot(target.x - fromX, target.y - fromY);
+    GIFTS.push({
+      x0: fromX, y0: fromY, to: target,
+      x1: target.x, y1: target.y,
+      lift: Math.min(H * 0.40, 70 + d * 0.40),
+      t: 0, dur: clamp(0.45 + d / 1000, 0.45, 1.15),
+      hue: hue, hops: hops
+    });
+  }
+
+  function giftAt(G, u) {
+    var x1 = G.to && G.to.vit > 0.2 ? G.to.x : G.x1;
+    var y1 = G.to && G.to.vit > 0.2 ? G.to.y : G.y1;
+    return { x: G.x0 + (x1 - G.x0) * u,
+             y: G.y0 + (y1 - G.y0) * u - Math.sin(Math.PI * u) * G.lift };
+  }
+
+  function updateGifts(dt, t) {
+    for (var i = GIFTS.length - 1; i >= 0; i--) {
+      var G = GIFTS[i];
+      G.t += dt;
+      if (G.t < G.dur) continue;
+      var c = G.to;
+      GIFTS.splice(i, 1);
+      if (!c || c.vit < 0.2) continue;
+      c.glowAdd = Math.max(c.glowAdd, 0.9);
+      c.mood = clamp(c.mood + 0.3, 0, 1);
+      burstRing(c.x, c.y, G.hue, 12, 460, 0.7);
+      wave(tctx, c.x, c.y, 24, G.hue + 30, 0.16);
+      if (A.ok && A.started) {
+        var gf = noteI(noteIdxAt(c.x)) * octAt(c.y), gp = panOf(c.x);
+        ambient(function () { chime(gf, 0.024, gp, 1.1, 2.0); });
+      }
+      if (G.hops > 1) {
+        var nxt = giftTarget(c.x, c.y, c);
+        if (nxt) sendGift(c.x, c.y, nxt, G.hops - 1, G.hue + rnd(20, 60));
+      }
+    }
+  }
+
+  function drawStonesAndGifts(awake) {
+    if (!GIFTS.length) return;
+    var lit = 0.5 + awake * 0.5;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (var i = 0; i < GIFTS.length; i++) {
+      var G = GIFTS[i];
+      var u = clamp(G.t / G.dur, 0, 1);
+      var tail = Math.max(0, u - 0.5);
+      var hue = norm360(G.hue).toFixed(0);
+      for (var pass = 0; pass < 2; pass++) {
+        ctx.beginPath();
+        for (var j = 0; j <= 16; j++) {
+          var pt = giftAt(G, tail + (u - tail) * (j / 16));
+          if (j) ctx.lineTo(pt.x * DPR, pt.y * DPR); else ctx.moveTo(pt.x * DPR, pt.y * DPR);
+        }
+        ctx.lineWidth = (pass ? 3.2 : 15) * DPR;
+        ctx.strokeStyle = 'hsla(' + hue + ',95%,' + (pass ? '78%,' : '58%,') +
+                          ((pass ? 0.88 : 0.18) * lit).toFixed(3) + ')';
+        ctx.stroke();
+      }
+      var hd = giftAt(G, u);
+      ctx.beginPath(); ctx.arc(hd.x * DPR, hd.y * DPR, 22 * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + hue + ',95%,58%,' + (0.15 * lit).toFixed(3) + ')';
+      ctx.fill();
+      ctx.beginPath(); ctx.arc(hd.x * DPR, hd.y * DPR, 7.5 * DPR, 0, TAU);
+      ctx.fillStyle = 'hsla(' + hue + ',98%,86%,' + (0.92 * lit).toFixed(3) + ')';
+      ctx.fill();
+      blob(tctx, hd.x, hd.y, 4, G.hue + 30, 0.10 * lit);
+    }
+    ctx.restore();
+  }
+
   function pokeCreature(c, px, py, t) {
     world.poked++;
     if (c.elder) {
@@ -7826,14 +8191,13 @@
       c.mood = clamp(c.mood + 0.25, 0, 1);
       if (c.ptype === 1) launchRockets(c, t);
       else if (c.ptype === 2) launchFirework(c, t);
-      else {
-        // rings: the one that was already there and worth keeping
-        spawnPulse(c.x, c.y, {
-          energy: 1.15, reach: rnd(0.55, 0.85), uni: 1.0, budget: 20,
-          kind: RIPPLES[0], layers: [0, 1, 2], speed: rnd(210, 300), show: 1.3
-        });
-        burstRing(c.x, c.y, world.hue + c.hueOff + 30, 14, 520, 0.8);
-        if (A.ok && A.started) { voiceBg++; breath(noteI(3), 0.022, panOf(c.x), 0.5, 1.4); voiceBg--; }
+      else if (c.ptype === 3) {
+        sendGift(c.x, c.y, giftTarget(c.x, c.y, c),
+                 1 + ((Math.random() * 5) | 0), world.hue + c.hueOff + rnd(20, 80));
+        if (A.ok && A.started) { voiceBg++; breath(noteI(1), 0.020, panOf(c.x), 0.45, 1.3); voiceBg--; }
+      } else {
+        skipStones(c, t);
+        if (A.ok && A.started) { voiceBg++; breath(noteI(3), 0.020, panOf(c.x), 0.5, 1.4); voiceBg--; }
       }
       return;
     }
@@ -10442,7 +10806,8 @@
       var pr = worldR(c);
       var lit2 = t * 0.05 + c.phase;
       var lx2 = Math.cos(lit2), ly2 = Math.sin(lit2);
-      if (!c.land) makeLand(c, c.ptype === 1 ? 2 : 4, 1.5);
+      if (!c.land) makeLand(c, c.ptype === 3 ? 11 : (c.ptype === 1 ? 2 : 4),
+                          c.ptype === 3 ? 0.55 : 1.5);
       if (!c.cloud) {
         c.cloud = [];
         for (var ci3 = 0; ci3 < 5; ci3++) {
@@ -10823,14 +11188,16 @@
     PTR_LIST = list;
     var DOWNS = [];
     for (var dz = 0; dz < list.length; dz++) if (list[dz].down) DOWNS.push(list[dz]);
-    handMode(DOWNS.length, dt);
-    updateString(list, dt, t);
-    updateEnsemble(DOWNS, dt, t);
+    updateAnchors(list, dt, t);
+    updateWeb(list, dt, t);
+    updateEnsemble(ANCH, dt, t);
     updateEcho(dt, t, swN);
     updatePinch(list, t);
     updateErosion(list, dt, t);
     updateWorldSpawn(dt, t);
     updateRockets(dt, t);
+    updateStones(dt, t);
+    updateGifts(dt, t);
     updateWEV(dt);
     updateMFX(dt);
 
@@ -11699,7 +12066,8 @@
 
     drawBubbles(t);
     drawEmbers();
-    drawString(awake);
+    drawStonesAndGifts(awake);
+    drawWeb(awake);
     drawEnsemble(awake);
     drawFingers(PTR_LIST, awake);
     drawEcho(awake);
