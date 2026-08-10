@@ -97,6 +97,11 @@ else on the screen, which transposes it.
 
 - It answers **every** phrase, up to 32 taps long.
 - It will not speak until you have genuinely stopped.
+- No two replies treat your phrase the same way. Each one decides how fast to
+  take it, whether to play all of it or pick its way through the middle,
+  whether to linger on a note it liked, and once in a while whether to run the
+  whole thing backwards. The notes are always yours and always in the scale, so
+  none of it can come out wrong.
 - Most replies end with a small cadence of their own: a run up the scale, a
   fall that lands on the root, or the root breathed twice an octave apart.
   Each note is placed where that pitch lives, so a rising ending is also a

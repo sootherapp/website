@@ -2134,12 +2134,35 @@
     voiceBg++;
     try { fn(); } finally { voiceBg--; }
   }
+  /* Comfortably below the ordinary ceiling of seventeen, so however much
+     phrase is in the air there is always room left for a touch to answer. */
+  var PRIO_RECORD_CAP = 12;
+
   function slot(dur, cap) {
     if (!A.ok || !A.started) return false;
     // a gathering is exactly when more of them should be allowed to ring
-    /* Never refused. It is still recorded, so everything else backs off around
-       it rather than piling on top. */
-    if (notePrio) { A.sfxEnds.push(A.ctx.currentTime + dur + 0.3); return true; }
+    /* Never refused, and that stays true. What changed is that the RECORDING
+       is now bounded.
+       ------------------------------------------------------------
+       This pushed into A.sfxEnds unconditionally, and A.sfxEnds is the very
+       thing every other sound measures itself against: over the cap, they
+       refuse. So a long enough run of priority notes filled the register and
+       quietly locked everything else out - taps on open space and taps on a
+       planet went silent while the phrase and the echo carried on sounding,
+       which is exactly the shape of the fault as reported.
+
+       Measured: over four echo replies, twenty-five of forty-four grants came
+       through here, and the register sat at thirty against a ceiling of
+       seventeen. It got much worse the day the echo started answering every
+       phrase instead of some of them, and worse again when a phrase could be
+       thirty-two notes long.
+
+       So the phrase still makes the room back off, but only ever down to the
+       point where the room can still speak. */
+    if (notePrio) {
+      if (busy(A.sfxEnds) < PRIO_RECORD_CAP) A.sfxEnds.push(A.ctx.currentTime + dur + 0.3);
+      return true;
+    }
     var lim = voicePrio ? 38 : (voiceBg ? 9 : (cap || 17)) + Math.round(bloom.k * 9);
     /* While a phrase is playing, anything that is not the phrase stands down.
        The phrase itself comes through mine(), which sets voicePrio, so it keeps
@@ -7999,7 +8022,17 @@
        again on its own tail. */
     ECHO.cool = 1.2;
 
-    /* Slightly quicker than you played it, which is what makes it read as an
+    /* IT PLAYS WITH WHAT YOU GAVE IT.
+       ------------------------------------------------------------
+       A faithful repeat is a recording, and a recording is only interesting
+       once. Every reply now decides for itself how to treat your phrase: how
+       fast to take it, whether to play all of it or pick its way through,
+       whether to linger on a note, and once in a while whether to run it
+       backwards. Nothing here can go wrong, because the notes are yours and
+       the scale cannot be played out of tune - all it is choosing is which of
+       your notes, in what order, how quickly.
+
+       Slightly quicker than you played it, which is what makes it read as an
        answer rather than as a recording.
 
        And about half the time it is played somewhere else on the screen. The
@@ -8025,11 +8058,44 @@
       // worth moving, or not worth pretending to
       if (Math.hypot(offX, offY) < 90) { offX = 0; offY = 0; }
     }
+    var rate = rnd(0.58, 1.28);          // this one is in a hurry, or it is not
     var seq = [];
     for (var i = 0; i < taps.length; i++) {
       seq.push({ x: clamp(taps[i].x + offX, 24, W - 24),
                  y: clamp(taps[i].y + offY, 24, H - 24),
-                 gap: i ? clamp((taps[i].t - taps[i - 1].t) * 0.86, 0.10, 1.5) : 0 });
+                 gap: i ? clamp((taps[i].t - taps[i - 1].t) * 0.86 * rate, 0.09, 1.6) : 0 });
+    }
+
+    /* Picking its way through rather than reciting. The first and the last are
+       always kept - they are what makes it recognisably your phrase - and the
+       middle is thinned, so what comes back is the shape of what you played
+       with some of it left to the imagination. */
+    if (seq.length > 3 && Math.random() < 0.42) {
+      var keep = [seq[0]], keepP = rnd(0.45, 0.8);
+      for (i = 1; i < seq.length - 1; i++) {
+        if (Math.random() < keepP) keep.push(seq[i]);
+      }
+      keep.push(seq[seq.length - 1]);
+      if (keep.length >= 3) {
+        // the time it saved by skipping a note is given to the next one
+        for (i = 1; i < keep.length; i++) keep[i].gap = clamp(keep[i].gap * 1.25, 0.09, 1.7);
+        seq = keep;
+      }
+    }
+
+    // caught on something it liked, and says it twice
+    if (seq.length > 2 && Math.random() < 0.34) {
+      var at = 1 + ((Math.random() * (seq.length - 1)) | 0);
+      seq.splice(at, 0, { x: seq[at].x, y: seq[at].y,
+                          gap: clamp(seq[at].gap * 0.45, 0.08, 0.4) });
+    }
+
+    // and once in a while it comes back the other way round
+    if (seq.length > 2 && Math.random() < 0.14) {
+      var gaps = [];
+      for (i = 0; i < seq.length; i++) gaps.push(seq[i].gap);
+      seq.reverse();
+      for (i = 0; i < seq.length; i++) seq[i].gap = gaps[i];
     }
     /* AND THEN IT FINISHES THE THOUGHT.
        ------------------------------------------------------------
