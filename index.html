@@ -2710,13 +2710,18 @@
     /* Remembered, in case you are playing a phrase. Only taps that got this
        far: a press on a lit note or a bubble has already been answered in its
        own way, and repeating those would be repeating the wrong thing. */
-    /* A phrase can only BEGIN in open space. Tapping a creature or a planet
-       over and over is a conversation with that creature - it is answering you
-       in its own voice each time - and having the room then repeat your
-       drumming back at you is one answer too many. Only the first tap is
-       judged: once a phrase is under way, catching a creature by accident
-       partway through should not throw the whole thing away. */
-    if (!ECHO.on && !(ECHO.taps.length === 0 && p.onBody)) {
+    /* A phrase is made of open space, all of it.
+       ------------------------------------------------------------
+       Tapping a creature or a planet is a conversation with that creature - it
+       answers in its own voice every time - and having the room repeat your
+       drumming back over the top is one answer too many. This used to judge
+       only the first tap, so a phrase that clipped a creature halfway through
+       still came back; now any tap that lands on a body ends the phrase then
+       and there. Whatever you were building is dropped, and the next tap on
+       open space starts a fresh one. */
+    if (p.onBody) {
+      ECHO.taps.length = 0;
+    } else if (!ECHO.on) {
       ECHO.taps.push({ t: t, x: tx0, y: ty0 });
       if (ECHO.taps.length > ECHO_MAX) ECHO.taps.shift();
     }
@@ -7071,8 +7076,25 @@
       burstRing(r.x, r.y, r.hue, 34 + ((Math.random() * 16) | 0), 1500, 1.25);
       burstRing(r.x, r.y, r.hue + 40, 14, 700, 0.9);
       flash(r.x, r.y, r.hue, 34, 0.40);
+      /* The payoff of the whole easter egg, so it is allowed to be heard.
+         One soft thump for the body of it, a bright ring over the top, and a
+         couple of crackles a moment later - and through mine(), because
+         somebody tapped a planet to ask for this. A single quiet drop at three
+         hundredths was being swallowed whole by the room. */
       if (r.sound && A.ok && A.started) {
-        drop(noteI(2 + ((Math.random() * 3) | 0)), 0.030, panOf(r.x));
+        var pn = panOf(r.x);
+        var lowF = noteI(1 + ((Math.random() * 2) | 0));
+        var hiF = noteI(6 + ((Math.random() * 3) | 0)) * 2;
+        mine(function () {
+          drop(lowF, 0.055, pn);
+          chime(hiF, 0.028, pn, 1.35, 1.6);
+        });
+        soon(0.08, function () {
+          ambient(function () { pluck(noteI(9) * 2, 0.024, clamp(pn + 0.3, -1, 1)); });
+        });
+        soon(0.17, function () {
+          ambient(function () { pluck(noteI(7) * 2, 0.018, clamp(pn - 0.35, -1, 1)); });
+        });
       }
       return;
     }
@@ -7122,7 +7144,20 @@
                : r.fate === 'spin' ? r.burn + 0.5
                : 4.0;
       if (r.age > over) { burstRocket(r, t); ROCKETS.splice(i, 1); continue; }
-      if (r.x < -90 || r.x > W + 90 || r.y < -90 || r.y > H + 90) ROCKETS.splice(i, 1);
+      if (r.x < -90 || r.x > W + 90 || r.y < -90 || r.y > H + 90) {
+        /* It goes off at the edge rather than being quietly deleted.
+           ------------------------------------------------------------
+           A shell leaves at nearly three hundred pixels a second and is pushed
+           for another second and a bit before it opens, so from a planet
+           anywhere near a margin it was off the screen first - and this line
+           threw it away with no ring and no bang. The firework had not gone
+           quiet; it had never happened. Brought back to just inside the glass
+           so the burst is on screen where it can be seen. */
+        r.x = clamp(r.x, 34, W - 34);
+        r.y = clamp(r.y, 34, H - 34);
+        burstRocket(r, t);
+        ROCKETS.splice(i, 1);
+      }
     }
   }
 
