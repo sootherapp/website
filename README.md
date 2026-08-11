@@ -1,4 +1,4 @@
-# Soother
+# Soother App
 
 **[soother.app](https://soother.app)**
 
@@ -131,7 +131,7 @@ else on the screen, which transposes it.
   | Rocky (icy poles) | It skips stones out across the field. Each hop is shorter than the last until they sink |
   | Banded | It launches rockets. Some burst early, some get a long way out, some corkscrew, some never leave |
   | Ringed | It puts up a firework: one shell, a clean rise, a proper ring |
-  | Dotted | It sends one arc of light out to a creature, which lights up and sometimes passes it on, and on again |
+  | Dotted | It sends one arc of light out to a creature, which lights up and sometimes passes it on, and on again. Wherever it lands, that creature often sets off stones or a firework of its own |
 
   Planets gather moons, and swiping at one builds up energy until it breaks apart.
 
@@ -168,6 +168,7 @@ settings surface. A school can bookmark one link per child and never see a menu.
 | `?scan=2` | Two switches: one key moves the highlight, the other takes it |
 | `?scanms=2000` | How long the highlight rests on each one |
 | `?dwell=1` | Eye gaze: look to pick up, look elsewhere to put down |
+| `?debug=1` | Log what the audio is doing to the browser console. Use this first if a screen goes silent |
 
 ### The ladder (`?level=`)
 
@@ -190,6 +191,12 @@ Set night mode, mute and the activity level the ordinary way on that device,
 then send the room to `/full`. Those settings live in the browser's own storage,
 not in the address, so they survive. There is deliberately no way out from
 inside the page. To undo it, go back to the plain address on that device.
+
+**It renews itself.** After eight hours of uptime, once nobody has touched it
+for thirty minutes, the page reloads. Both conditions are required, so it can
+never reload under someone's hands. That clears anything that has accumulated
+over a long run and quietly picks up the latest deployed version, which matters
+for a screen nobody visits.
 
 Kiosk mode cannot defeat the device's own home gesture. For that, use Guided
 Access on an iPad, or a kiosk browser on Android or Windows.
