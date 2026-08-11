@@ -1845,12 +1845,29 @@
      clock, never a counter decremented in an onended callback: a
      callback missed during a main-thread stall would strand the
      count at its cap and silence the layer permanently. */
+  /* How many voices are still ringing. Every gated sound in the app measures
+     itself against this, so anything that can make it wrong can silence the
+     whole room - which is exactly what happened to a screen left running
+     overnight: taps and planets went quiet while the phrase and the echo,
+     which are never refused, carried on.
+
+     Two guards, both of them for things that should not be possible:
+
+     A time that is not a finite number can never be less than t, so it would
+     sit in the register forever and count as busy forever. One of those a
+     minute is a dead room by morning. They are treated as expired.
+
+     And the array is capped outright. Nothing should ever push past the
+     ceiling, but "should" is what an eight hour run is for. */
+  var ENDS_MAX = 64;
   function busy(ends) {
     if (!A.ctx) return 0;
     var t = A.ctx.currentTime, n = 0;
     for (var i = ends.length - 1; i >= 0; i--) {
-      if (ends[i] <= t) ends.splice(i, 1); else n++;
+      var e = ends[i];
+      if (!(e > t)) ends.splice(i, 1); else n++;      // catches NaN as well
     }
+    if (ends.length > ENDS_MAX) { ends.splice(0, ends.length - ENDS_MAX); n = ENDS_MAX; }
     return n;
   }
   var PENT = [0, 2, 4, 7, 9];
@@ -6965,7 +6982,7 @@
 
   function launchFirework(big, t) {
     if (ROCKETS.length >= ROCKET_MAX) return;
-    var R = worldR(big);
+    var R = bodyR(big);
     var ang = Math.random() * TAU;
     ROCKETS.push({
       kind: 'shell',
@@ -8231,8 +8248,15 @@
   var SPLASH_KINDS = ['plain', 'plain', 'plain', 'plain', 'plain', 'plain',
                       'plain', 'octa', 'double', 'wide'];
 
+  /* How big the thing throwing this is. A planet has its own radius; anything
+     else is measured the way it is drawn, so the gift can set off a creature
+     using exactly the same machinery. */
+  function bodyR(c) {
+    return c.world ? worldR(c) : (c.size * LAYERS[c.L].size + 10);
+  }
+
   function skipStones(big, t) {
-    var R = worldR(big);
+    var R = bodyR(big);
     var n = 2 + ((Math.random() * 3) | 0);
     var voice = 0;
     for (var i = 0; i < n && STONES.length < STONE_MAX; i++) {
@@ -8369,6 +8393,15 @@
       if (A.ok && A.started) {
         var gf = noteI(noteIdxAt(c.x)) * octAt(c.y), gp = panOf(c.x);
         ambient(function () { chime(gf, 0.024, gp, 1.1, 2.0); });
+      }
+      /* And wherever it lands, something happens. The creature it reached
+         does the thing a planet does - skips a few stones out across the
+         field, or puts up a firework - so the arc is not just a pretty line
+         between two points, it is a fuse. Which of the two is decided fresh
+         each landing, so following one of these across the screen is worth
+         doing for its own sake. */
+      if (Math.random() < 0.62) {
+        if (Math.random() < 0.5) skipStones(c, t); else launchFirework(c, t);
       }
       if (G.hops > 1) {
         var nxt = giftTarget(c.x, c.y, c);
@@ -11338,6 +11371,39 @@
 
   var lastT = now(), dith = 0, momentK = 0;
 
+  /* A LAST RESORT, because this screen has to survive a night on its own.
+     If the voice register has been saturated for a good while, something has
+     gone wrong that no amount of reasoning at this level can fix, and the
+     right answer is to let go of it and carry on. Silence that lasts is worse
+     than any glitch that does not. */
+  var jamFor = 0;
+  function unjamVoices(dt) {
+    if (!A.ok || !A.ctx) return;
+    var full = busy(A.sfxEnds) >= 17 || busy(A.padEnds) >= 24;
+    jamFor = full ? jamFor + dt : 0;
+    if (jamFor > 20) {
+      A.sfxEnds.length = 0;
+      A.padEnds.length = 0;
+      jamFor = 0;
+    }
+  }
+
+  /* AND THE PAGE RENEWS ITSELF.
+     Left up for a working day and then left alone for half an hour, it
+     reloads. Nobody is watching at that moment by definition, it clears
+     whatever has accumulated in eight hours of running, and a screen in a
+     waiting room quietly picks up the latest version without anybody visiting
+     it. The two conditions are both required: a long uptime alone would
+     reload under somebody's hands. */
+  var BORN_AT = now();
+  var RENEW_AFTER = 8 * 3600;
+  var RENEW_IDLE = 30 * 60;
+  function renewCheck() {
+    if (now() - BORN_AT < RENEW_AFTER) return;
+    if (world.idle < RENEW_IDLE) return;
+    try { location.reload(); } catch (e) {}
+  }
+
   function frame() {
     requestAnimationFrame(frame);
     if (needResize()) resize();
@@ -11551,6 +11617,8 @@
     updateWeb(list, dt, t);
     updateEnsemble(ANCH, dt, t);
     updateEcho(dt, t, swN);
+    unjamVoices(dt);
+    renewCheck();
     updatePinch(list, t);
     updateErosion(list, dt, t);
     updateWorldSpawn(dt, t);
